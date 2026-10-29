@@ -1,12 +1,12 @@
 import { NO_INPUT, type InputFrame } from './input';
 import type { MoveId } from './moves';
-import { COUNTER_CAP, ENERGY_MAX, HEALTH_MAX, STAGE_WIDTH } from './constants';
+import { COUNTER_CAP, ENERGY_MAX, GUARD_MAX, HEALTH_MAX, STAGE_WIDTH } from './constants';
 
 /**
- * What the fighter is doing. Moves (kick, blast, beam...) are actions too. `hit` = in hitstun,
- * `ko` = knocked out for the rest of the round.
+ * What the fighter is doing. Moves (kick, blast, beam...) are actions too. `crouch` and `block`
+ * last while their button is held; `hit` = in hitstun, `ko` = knocked out for the rest of the round.
  */
-export type Action = 'idle' | 'walk' | 'air' | 'hit' | 'ko' | MoveId;
+export type Action = 'idle' | 'walk' | 'air' | 'crouch' | 'block' | 'hit' | 'ko' | MoveId;
 
 export interface FighterState {
   /** Horizontal centre, stage px. */
@@ -32,6 +32,14 @@ export interface FighterState {
   /** Ticks since energy was last spent (regeneration waits for ENERGY_REGEN_DELAY). */
   readonly energyIdleTicks: number;
   readonly health: number;
+  /** Shield strength, 0..GUARD_MAX. */
+  readonly guard: number;
+  /** Ticks since the shield was last up or hit (regeneration waits for GUARD_REGEN_DELAY). */
+  readonly guardIdleTicks: number;
+  /** Ticks since the guard was broken (COUNTER_CAP if long ago); for the shatter effect. */
+  readonly guardBrokenTick: number;
+  /** Skid velocity from being shoved (px per tick, on top of `vx`); decays to 0. */
+  readonly shove: number;
   /** Remaining ticks of hitstun while `action` is 'hit'. */
   readonly hitstun: number;
   /** The current move already connected (a kick hits once). */
@@ -115,6 +123,10 @@ export function createFighter(x: number, facing: 1 | -1): FighterState {
     energy: ENERGY_MAX,
     energyIdleTicks: COUNTER_CAP,
     health: HEALTH_MAX,
+    guard: GUARD_MAX,
+    guardIdleTicks: COUNTER_CAP,
+    guardBrokenTick: COUNTER_CAP,
+    shove: 0,
     hitstun: 0,
     moveHit: false,
     beamBlocked: false,

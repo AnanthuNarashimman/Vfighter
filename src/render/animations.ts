@@ -15,7 +15,9 @@ export type FrameName =
   | 'blast_charge'
   | 'blast_release'
   | 'jump_air'
-  | 'hit_recoil';
+  | 'hit_recoil'
+  | 'block'
+  | 'duck';
 
 const IDLE_FRAME_TICKS = 36;
 /** Within each step, ticks [CONTACT_HALF, STEP - CONTACT_HALF) show the passing pose. */
@@ -38,6 +40,10 @@ export function frameFor(f: FighterState): FrameName {
     case 'hit':
     case 'ko':
       return 'hit_recoil';
+    case 'block':
+      return 'block';
+    case 'crouch':
+      return 'duck';
     case 'air':
       return 'jump_air';
     case 'walk':

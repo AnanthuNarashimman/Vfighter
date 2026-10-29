@@ -1,5 +1,5 @@
 import { Container, Graphics, Text, type Ticker } from 'pixi.js';
-import { ENERGY_MAX, HEALTH_MAX } from '../sim/constants';
+import { ENERGY_MAX, GUARD_MAX, GUARD_RAISE_MIN, HEALTH_MAX } from '../sim/constants';
 import { MOVES } from '../sim/moves';
 import type { FighterState, GameState } from '../sim/state';
 import { CHARACTERS, type CharacterDef, type HudPalette } from './characters';
@@ -26,10 +26,13 @@ interface BarShape {
   readonly slant: number;
 }
 
-/** Health: the big bar across the top, each player's reaching nearly to the centre. */
-const HEALTH_BAR: BarShape = { x: 16, y: 28, width: 500, height: 22, slant: 12 };
+/** Health: the main bar along the top of each corner. */
+const HEALTH_BAR: BarShape = { x: 16, y: 28, width: 330, height: 13, slant: 8 };
 /** Energy: a slimmer segmented gauge tucked under the health bar. */
-const BAR: BarShape = { x: 16, y: 58, width: 170, height: 9, slant: 6 };
+const BAR: BarShape = { x: 16, y: 49, width: 170, height: 7, slant: 5 };
+/** Guard: a hairline under the energy gauge. */
+const GUARD_BAR: BarShape = { x: 16, y: 61, width: 170, height: 4, slant: 3 };
+const GUARD_COLORS = { fill: 0xdfe8f2, low: 0xd8402a, trough: 0x1a1d22 } as const;
 /** Player tag and name sit above the health bar, starting here from the screen edge. */
 const TAG_X = HEALTH_BAR.x + HEALTH_BAR.slant;
 const NAME_X = TAG_X + 27;
@@ -53,8 +56,14 @@ type ControlHint = readonly [keys: readonly string[], label: string];
 
 /** Per player, matching input/keyboard.ts PLAYER_BINDINGS. The last entry is the dev-only character switch (see main.ts). */
 const CONTROLS: readonly (readonly ControlHint[])[] = [
-  [[['A', 'D'], 'move'], [['W'], 'jump'], [['K'], 'kick'], [['J'], 'blast'], [['L'], 'beam (hold)'], [['C'], 'switch fighter']],
-  [[['←', '→'], 'move'], [['↑'], 'jump'], [['.'], 'kick'], [[','], 'blast'], [['/'], 'beam (hold)'], [['M'], 'switch fighter']],
+  [
+    [['A', 'D'], 'move'], [['W'], 'jump'], [['S'], 'duck'], [['K'], 'kick'], [['J'], 'blast'], [['L'], 'beam'],
+    [['I'], 'block'], [['C'], 'switch fighter'],
+  ],
+  [
+    [['←', '→'], 'move'], [['↑'], 'jump'], [['↓'], 'duck'], [['.'], 'kick'], [[','], 'blast'], [['/'], 'beam'],
+    [['R-Shift'], 'block'], [['M'], 'switch fighter'],
+  ],
 ];
 
 /**
@@ -195,6 +204,7 @@ class PlayerPanel {
   readonly name: Text;
   private readonly healthBar = new Graphics();
   private readonly gauge = new Graphics();
+  private readonly guardBar = new Graphics();
   private readonly tagBg = new Graphics();
   private palette: HudPalette = CHARACTERS[0].hud;
   private shownEnergy = ENERGY_MAX;
@@ -208,6 +218,7 @@ class PlayerPanel {
     // Bars are drawn left-to-right and flipped for P2, so both drain from the centre outward.
     this.healthBar.scale.x = side;
     this.gauge.scale.x = side;
+    this.guardBar.scale.x = side;
 
     const tag = new Container();
     const tagText = new Text({ text: `P${player + 1}`, style: { ...TITLE_STYLE, fontSize: 10, fill: 0x1a1008 } });
@@ -219,7 +230,7 @@ class PlayerPanel {
     this.name.anchor.set(side > 0 ? 0 : 1, 0);
     this.name.position.set(side * NAME_X, 8);
 
-    this.root.addChild(this.healthBar, this.gauge, tag, this.name);
+    this.root.addChild(this.healthBar, this.gauge, this.guardBar, tag, this.name);
   }
 
   setCharacter(character: CharacterDef): void {
@@ -242,6 +253,24 @@ class PlayerPanel {
     if (f.health >= this.ghostHealth) this.ghostHealth = f.health;
     else if (this.ghostHoldMs === 0) this.ghostHealth = Math.max(f.health, this.ghostHealth - HEALTH_GHOST_SPEED * dt);
     this.drawHealth(time);
+    this.drawGuard(f.guard, f.action === 'block');
+  }
+
+  /** Red while too low to raise the shield; brighter while the shield is up. */
+  private drawGuard(guard: number, raised: boolean): void {
+    const { width, height } = GUARD_BAR;
+    const strip = slantStrip(GUARD_BAR);
+    const fill = (Math.max(0, Math.min(GUARD_MAX, guard)) / GUARD_MAX) * width;
+    const g = this.guardBar.clear();
+    g.poly(strip(-2, width + 2, -2, height + 2)).fill({ color: 0x000000, alpha: 0.6 });
+    g.poly(strip(0, width)).fill(GUARD_COLORS.trough);
+    if (fill > 0) {
+      const color = guard < GUARD_RAISE_MIN ? GUARD_COLORS.low : GUARD_COLORS.fill;
+      g.poly(strip(0, fill)).fill({ color, alpha: raised ? 1 : 0.75 });
+    }
+    // Notch at the reserve needed to raise the shield again.
+    const px = (GUARD_RAISE_MIN / GUARD_MAX) * width;
+    g.poly(strip(px - 0.75, px + 0.75)).fill({ color: 0x000000, alpha: 0.7 });
   }
 
   private drawHealth(time: number): void {

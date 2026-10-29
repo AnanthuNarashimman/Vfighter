@@ -1,10 +1,10 @@
 import { Container, Graphics, Sprite, Texture, TilingSprite } from 'pixi.js';
-import { BEAM_MAX_LENGTH } from '../sim/constants';
+import { BEAM_MAX_LENGTH, GUARD_MAX, SHIELD_OPEN_TICKS, SHIELD_REACH } from '../sim/constants';
 import { MOVES, MUZZLE, phaseAt } from '../sim/moves';
 import type { FighterState, GameState, ProjectileState } from '../sim/state';
 import type { EnergyStyle } from './characters';
 import { FIGHTER_HEIGHT, FLOOR_Y } from './layout';
-import { bolt, boltPoint, Crackle, drawBolts, radialArcs, type BoltLayer } from './lightning';
+import { bolt, boltPoint, Crackle, drawBolts, radialArcs, type Bolt, type BoltFrame, type BoltLayer } from './lightning';
 
 interface EnergyTheme {
   /** Colours, hottest first: white-hot core, body, outer fringe. */
@@ -42,7 +42,7 @@ const BEAM_FLOW = 2.2;
 /** Muzzle flash length after a blast is released, in ticks (the blast's active phase). */
 const FLASH_TICKS = MOVES.blast.phases[1].ticks;
 
-const MAX_PARTICLES = 700;
+const MAX_PARTICLES = 1200;
 
 /**
  * Draws ki charges, blasts and beams. Purely cosmetic: reads simulation state and never writes it,
@@ -62,6 +62,8 @@ export class EnergyView {
   private readonly styles: EnergyStyle[] = [];
   /** Health seen last frame per fighter, to spot hits landing. */
   private readonly lastHealth: number[] = [];
+  /** guardBrokenTick seen last frame per fighter, to spot guard breaks. */
+  private readonly lastBroken: number[] = [];
   private time = 0;
 
   constructor() {
@@ -95,6 +97,19 @@ export class EnergyView {
       this.lastHealth[i] = f.health;
       // Sparks in the attacker's colours, off the side of the body that took the hit.
       if (lost > 0) impact(this.particles, f, lost, this.themeFor(curr.fighters.length === 2 ? 1 - i : i));
+
+      // A shield broken by a hit goes off like a blast of its own element (not one that just ran dry).
+      if (f.guardBrokenTick < (this.lastBroken[i] ?? f.guardBrokenTick)) {
+        const theme = this.themeFor(i);
+        const x = f.x + f.facing * (SHIELD_REACH - SHIELD.rx * FIGHTER_HEIGHT * 0.5);
+        const fx = new ClashFx(x, FLOOR_Y - (f.y + SHIELD.centreY * FIGHTER_HEIGHT), theme, theme, true, this.particles);
+        this.clashes.push(fx);
+        this.root.addChild(fx.root);
+        this.ground.addChild(fx.ground);
+      }
+      this.lastBroken[i] = f.guardBrokenTick;
+
+      skidDust(this.particles, f, dt);
     });
 
     this.updateProjectiles(prev, curr, alpha, dt);
@@ -168,6 +183,7 @@ class FighterFx {
   private readonly arcs = new Graphics();
   private readonly crackle = new Crackle();
   private readonly tipCrackle = new Crackle(40);
+  private readonly shield = new ShieldFx();
   private theme!: EnergyTheme;
 
   constructor(theme: EnergyTheme) {
@@ -188,12 +204,13 @@ class FighterFx {
       this.beamMuzzleCore,
     );
     this.orb.addChild(this.orbFringe, this.orbGlow, this.orbCore);
-    this.root.addChild(this.beam, this.orb, this.arcs);
+    this.root.addChild(this.shield.root, this.beam, this.orb, this.arcs);
     this.hide();
   }
 
   setTheme(theme: EnergyTheme): void {
     this.theme = theme;
+    this.shield.setTheme(theme);
     for (const sp of [this.orbFringe, this.beamFringe]) sp.tint = theme.fringe;
     for (const sp of [this.ground, this.orbGlow, this.beamBody, this.beamMuzzle, this.beamTip]) sp.tint = theme.body;
     for (const sp of [this.orbCore, this.beamCore, this.beamMuzzleCore, this.beamTipCore]) sp.tint = theme.core;
@@ -201,13 +218,15 @@ class FighterFx {
 
   update(prev: FighterState, curr: FighterState, alpha: number, time: number, dt: number, particles: Particles): void {
     this.hide();
+    const x = lerp(prev.x, curr.x, alpha);
+    const y = lerp(prev.y, curr.y, alpha);
+    this.shield.update(curr, x, y, time, dt, particles);
+
     if (curr.action !== 'blast' && curr.action !== 'beam') return;
     const move = MOVES[curr.action];
     const phase = phaseAt(move, curr.actionTick, curr.moveSustained);
     if (!phase) return;
 
-    const x = lerp(prev.x, curr.x, alpha);
-    const y = lerp(prev.y, curr.y, alpha);
     const at = (pt: { x: number; y: number }) => ({
       x: x + curr.facing * pt.x * FIGHTER_HEIGHT,
       y: FLOOR_Y - (y + pt.y * FIGHTER_HEIGHT),
@@ -417,6 +436,443 @@ class FighterFx {
     this.ground.width = width;
     this.ground.height = 46;
     this.ground.alpha = strength * falloff * flicker;
+  }
+}
+
+/**
+ * Shield geometry, as fractions of FIGHTER_HEIGHT. It is projected from the outstretched palm of
+ * the block pose (measured from both characters' block frames) and curves around in front of it:
+ * a tall dome whose face stands at the sim's SHIELD_REACH, where blocked energy stops.
+ */
+const SHIELD = {
+  palm: { x: 0.49, y: 0.725 },
+  /** Dome: horizontal and vertical radius, vertical centre (below the palm, to cover the legs). */
+  rx: 0.2,
+  ry: 0.56,
+  centreY: 0.56,
+  /** The dome spans this many radians either side of straight ahead. */
+  sweep: 1.25,
+  /** Where blocked attacks strike the dome (energy flies at ~0.68 of the body: just above centre). */
+  impactAngle: -0.22,
+} as const;
+/** A blocked hit's ripple runs across the dome for this long, seconds. */
+const RIPPLE_LIFE = 0.38;
+/** Shield flare after a blocked hit, ms. */
+const SHIELD_FLARE_MS = 180;
+/** Fire cools from white-hot to this deep ember red as it rises off the shield. */
+const EMBER_RED = 0x7a1204;
+
+type Point = { x: number; y: number };
+
+/**
+ * The guard shield, projected from the palm, one element per energy style.
+ *
+ * Fire: a dome of living flame. Billowing puffs rise off its face and cool from white-hot to deep
+ * red, a hot rim ripples, embers drift up. Thunder: a plasma
+ * barrier, lightning filaments wander from the palm out to a crackling rim like a plasma ball,
+ * with a static haze filling the dome. Both unfold from the palm when raised, dim and sputter as
+ * the guard runs low, flare on blocked hits (thunder's filaments all leap to the impact), and
+ * burst apart on a guard break.
+ */
+class ShieldFx {
+  readonly root = new Container();
+  private readonly haze = glowSprite();
+  private readonly sheet = glowSprite();
+  private readonly palmGlow = glowSprite();
+  private readonly palmCore = coreSprite();
+  private readonly lines = new Graphics();
+  private readonly crackle = new Crackle(45);
+  private readonly rimCrackle = new Crackle(35);
+  /** Where each plasma filament touches the rim; they wander. */
+  private readonly filaments = [-0.9, -0.5, -0.15, 0.2, 0.55, 0.95, 0.05];
+  private theme!: EnergyTheme;
+  private readonly ripples: { sprite: Sprite; age: number }[] = [];
+  private lastGuard = GUARD_MAX;
+  /** guardBrokenTick seen last frame (null until the first frame), to spot a break. */
+  private lastBroken: number | null = null;
+  private flareMs = 0;
+
+  constructor() {
+    this.lines.blendMode = 'add';
+    this.root.addChild(this.haze, this.sheet, this.lines, this.palmGlow, this.palmCore);
+  }
+
+  setTheme(theme: EnergyTheme): void {
+    this.theme = theme;
+    this.haze.tint = theme.fringe;
+    this.sheet.tint = theme.body;
+    this.palmGlow.tint = theme.body;
+    this.palmCore.tint = theme.core;
+  }
+
+  update(f: FighterState, x: number, y: number, time: number, dt: number, particles: Particles): void {
+    const t = this.theme;
+    const H = FIGHTER_HEIGHT;
+    const baseY = FLOOR_Y - y;
+    /** Local frame: x forward from the body centre, y down from the feet (so bolts can use it). */
+    const world = (p: Point): Point => ({ x: x + f.facing * p.x, y: baseY + p.y });
+    const palm: Point = { x: SHIELD.palm.x * H, y: -SHIELD.palm.y * H };
+
+    const blocking = f.action === 'block';
+    const strength = f.guard / GUARD_MAX;
+    // Unfold from the palm when raised; a drained guard shrinks the dome a little.
+    const open = blocking ? easeOut(Math.min(1, (f.actionTick + 1) / SHIELD_OPEN_TICKS)) : 1;
+    const size = open * (0.85 + 0.15 * strength);
+    const rx = SHIELD.rx * H * size;
+    const ry = SHIELD.ry * H * size;
+    const full: Point = { x: SHIELD_REACH - SHIELD.rx * H, y: -SHIELD.centreY * H };
+    const centre: Point = { x: lerp(palm.x, full.x, open), y: lerp(palm.y, full.y, open) };
+    /** A point on the dome at angle `a` (0 = straight ahead, negative = up), pushed out by `dr` px. */
+    const rim = (a: number, dr = 0): Point => ({
+      x: centre.x + Math.cos(a) * (rx + dr),
+      y: centre.y + Math.sin(a) * (ry + dr),
+    });
+
+    // Guard break: the shield bursts apart.
+    if (this.lastBroken !== null && f.guardBrokenTick < this.lastBroken) this.shatter((a) => world(rim(a)), particles);
+    this.lastBroken = f.guardBrokenTick;
+    // A blocked hit costs far more guard per tick than holding the shield does.
+    const lost = this.lastGuard - f.guard;
+    this.lastGuard = f.guard;
+    if (blocking && lost > 0.5) {
+      this.flareMs = SHIELD_FLARE_MS;
+      const big = lost >= 10; // a kick or blast; a beam grinds in small steps every tick
+      const at = SHIELD.impactAngle + (Math.random() - 0.5) * (big ? 0.3 : 0.12);
+      const hit = world(rim(at, 4));
+      sparksOff(particles, hit, f.facing, big ? 26 : 3, t);
+      this.disperse(rim, at, f.facing, big ? 1 : 0.12, particles, world);
+      if (big) this.ripple(hit);
+    }
+    this.flareMs = Math.max(0, this.flareMs - dt * 1000);
+    this.updateRipples(dt, ry);
+
+    this.lines.clear();
+    this.root.visible = blocking;
+    if (!blocking) return;
+
+    const flare = this.flareMs / SHIELD_FLARE_MS;
+    // A weak guard sputters.
+    const sputter = strength < 0.3 ? 0.4 + Math.random() * 0.6 : 1;
+    const k = Math.min(1, (0.5 + 0.5 * strength) * sputter + flare * 0.6);
+
+    const c = world(centre);
+    this.haze.position.set(c.x, c.y);
+    this.haze.width = rx * 3.6;
+    this.haze.height = ry * 2.6;
+    this.haze.alpha = (0.22 + 0.2 * flare) * k;
+    // The face of the dome, seen nearly edge-on: a tall bright sheet hugging the rim.
+    const face = world(rim(0, -rx * 0.35));
+    this.sheet.position.set(face.x, face.y);
+    this.sheet.width = rx * 1.7;
+    this.sheet.height = ry * 2.15;
+    this.sheet.alpha = (t.lightning ? 0.3 : 0.42) * k * (1 + flare * 0.5);
+
+    const p = world(palm);
+    const pulse = 1 + 0.12 * Math.sin(time * 0.03) + (Math.random() - 0.5) * 0.12;
+    this.palmGlow.position.set(p.x, p.y);
+    setSize(this.palmGlow, 70 * pulse * (1 + flare * 0.5));
+    this.palmGlow.alpha = 0.8 * k;
+    this.palmCore.position.set(p.x, p.y);
+    setSize(this.palmCore, 22 * pulse);
+    this.palmCore.alpha = k;
+
+    const frame: BoltFrame = { x, y: baseY, flip: f.facing, scale: 1 };
+    if (t.lightning) this.drawThunder(palm, rim, frame, world, k, flare, time, dt, particles);
+    else this.drawFire(rim, world, f.facing, k, flare, time, dt, particles);
+  }
+
+  /**
+   * Living flame: billowing puffs boil off the dome's face and the space inside it, rising and
+   * cooling to ember red; a turbulent hot rim; embers.
+   */
+  private drawFire(
+    rim: (a: number, dr?: number) => Point,
+    world: (p: Point) => Point,
+    facing: 1 | -1,
+    k: number,
+    flare: number,
+    time: number,
+    dt: number,
+    particles: Particles,
+  ): void {
+    const t = this.theme;
+    const strokePath = (pts: Point[], color: number, width: number, alpha: number) => {
+      pts.forEach((pt, i) => {
+        const w = world(pt);
+        if (i === 0) this.lines.moveTo(w.x, w.y);
+        else this.lines.lineTo(w.x, w.y);
+      });
+      this.lines.stroke({ color, width, alpha, cap: 'round', join: 'round' });
+    };
+
+    // Turbulent rim: two noise octaves crawl upward along it, so the edge licks like flame.
+    const steps = 30;
+    for (const layer of [
+      { color: t.fringe, width: 12, alpha: 0.4, wobble: 7 },
+      { color: t.body, width: 4.5, alpha: 0.9, wobble: 5 },
+      { color: t.core, width: 1.8 + flare * 2, alpha: 1, wobble: 3 },
+    ]) {
+      const pts: Point[] = [];
+      for (let i = 0; i <= steps; i++) {
+        const a = -SHIELD.sweep + (2 * SHIELD.sweep * i) / steps;
+        const dr = layer.wobble * (Math.sin(a * 8 + time * 0.02) + 0.55 * Math.sin(a * 19 + time * 0.037));
+        pts.push(rim(a, dr));
+      }
+      strokePath(pts, layer.color, layer.width, layer.alpha * k);
+    }
+
+    // The flame body: puffs swell and rise off the face (most) and inside the dome (some).
+    const puff = (onFace: boolean) => {
+      const a = (Math.random() * 2 - 1) * SHIELD.sweep;
+      const p = world(rim(a, onFace ? (Math.random() - 0.5) * 10 : -Math.random() * 0.8 * SHIELD.rx * FIGHTER_HEIGHT));
+      particles.emit({
+        x: p.x,
+        y: p.y,
+        vx: facing * (15 + Math.random() * 45),
+        vy: -(90 + Math.random() * 110),
+        life: 0.3 + Math.random() * 0.3,
+        size: 12 + Math.random() * 14,
+        tint: Math.random() < 0.5 ? t.core : t.body,
+        tintEnd: EMBER_RED,
+        grow: 2.3,
+        alpha: 0.5,
+        drag: 1.5,
+        round: true,
+      });
+    };
+    let n = spawnCount(230 * k * dt * (1 + flare));
+    while (n-- > 0) puff(true);
+    n = spawnCount(70 * k * dt);
+    while (n-- > 0) puff(false);
+
+    n = spawnCount(35 * k * dt);
+    while (n-- > 0) {
+      const p = world(rim((Math.random() * 2 - 1) * SHIELD.sweep));
+      particles.emit({
+        x: p.x,
+        y: p.y,
+        vx: facing * Math.random() * 60 + (Math.random() - 0.5) * 30,
+        vy: -(80 + Math.random() * 160),
+        life: 0.5 + Math.random() * 0.6,
+        size: 2 + Math.random() * 2.5,
+        tint: t.core,
+        tintEnd: t.fringe,
+        drag: 0.8,
+      });
+    }
+  }
+
+  /**
+   * Plasma barrier: filaments of lightning wander from the palm out to the dome's rim (leaping
+   * together to the point of impact on a hit), the rim itself crackles, sparks fizz where the
+   * filaments touch it.
+   */
+  private drawThunder(
+    palm: Point,
+    rim: (a: number, dr?: number) => Point,
+    frame: BoltFrame,
+    world: (p: Point) => Point,
+    k: number,
+    flare: number,
+    time: number,
+    dt: number,
+    particles: Particles,
+  ): void {
+    const t = this.theme;
+    // Filament ends drift along the rim, like a plasma ball's.
+    for (let i = 0; i < this.filaments.length; i++) {
+      const a = this.filaments[i] + (Math.random() - 0.5) * 6 * dt;
+      this.filaments[i] = Math.max(-SHIELD.sweep, Math.min(SHIELD.sweep, a));
+    }
+    const filaments = this.crackle.get('filaments', time, () =>
+      this.filaments.map((a) => {
+        // On impact every filament leaps to the struck point.
+        const end = rim(flare > 0.4 ? (Math.random() - 0.5) * 0.35 : a);
+        const len = Math.hypot(end.x - palm.x, end.y - palm.y);
+        return bolt(palm.x, palm.y, end.x, end.y, 4, len * 0.12, 0.5 + Math.random() * 0.3);
+      }),
+    );
+    drawBolts(this.lines, filaments, frame, boltLayers(t, 0.6 + flare * 0.6, k * 0.9));
+
+    const segments = 9;
+    const angle = (i: number, count: number) => -SHIELD.sweep + (2 * SHIELD.sweep * i) / count;
+    const rimBolts = this.rimCrackle.get('rim', time, () => {
+      const out: Bolt[] = [];
+      for (let i = 0; i < segments; i++) {
+        const p0 = rim(angle(i, segments));
+        const p1 = rim(angle(i + 1, segments));
+        out.push(bolt(p0.x, p0.y, p1.x, p1.y, 3, 6, 0.8));
+      }
+      return out;
+    });
+    drawBolts(this.lines, rimBolts, frame, boltLayers(t, 0.7 + flare * 0.4, k));
+    // A smooth faint shell so the dome still reads between flickers.
+    for (let i = 0; i <= 26; i++) {
+      const w = world(rim(angle(i, 26)));
+      if (i === 0) this.lines.moveTo(w.x, w.y);
+      else this.lines.lineTo(w.x, w.y);
+    }
+    this.lines.stroke({ color: t.body, width: 6, alpha: 0.22 * k, cap: 'round' });
+
+    // Sparks fizz off where the filaments touch the rim.
+    let n = spawnCount(50 * k * dt * (1 + 2 * flare));
+    while (n-- > 0) {
+      const a = this.filaments[Math.floor(Math.random() * this.filaments.length)];
+      const p = world(rim(a));
+      const dir = Math.random() * Math.PI * 2;
+      const speed = 60 + Math.random() * 200;
+      particles.emit({
+        x: p.x,
+        y: p.y,
+        vx: Math.cos(dir) * speed,
+        vy: Math.sin(dir) * speed,
+        life: 0.08 + Math.random() * 0.14,
+        size: 1.5 + Math.random() * 2.5,
+        tint: Math.random() < 0.6 ? t.core : t.body,
+        drag: 6,
+      });
+    }
+  }
+
+  /**
+   * The struck energy spreading out across the dome and thinning into the air: puffs run up and
+   * down along the surface from the impact (tangent to it), drifting slightly outward.
+   */
+  private disperse(
+    rim: (a: number, dr?: number) => Point,
+    at: number,
+    facing: 1 | -1,
+    amount: number,
+    particles: Particles,
+    world: (p: Point) => Point,
+  ): void {
+    const t = this.theme;
+    const p = world(rim(at));
+    let n = spawnCount(28 * amount);
+    while (n-- > 0) {
+      // Tangent of the dome at `at` (local frame), either way along it, plus a little outward normal.
+      const along = Math.random() < 0.5 ? -1 : 1;
+      const tx = -Math.sin(at) * SHIELD.rx * along;
+      const ty = Math.cos(at) * SHIELD.ry * along;
+      const len = Math.hypot(tx, ty) || 1;
+      const speed = 140 + Math.random() * 260;
+      const out = 30 + Math.random() * 50;
+      particles.emit({
+        x: p.x,
+        y: p.y,
+        vx: facing * ((tx / len) * speed + Math.cos(at) * out),
+        vy: (ty / len) * speed + Math.sin(at) * out,
+        life: 0.25 + Math.random() * 0.25,
+        size: 12 + Math.random() * 12,
+        tint: Math.random() < 0.4 ? t.core : t.body,
+        tintEnd: t.lightning ? t.fringe : EMBER_RED,
+        grow: 2,
+        alpha: 0.45,
+        drag: 3.5,
+        round: true,
+      });
+      if (t.lightning) {
+        // Static skittering along the surface with it.
+        particles.emit({
+          x: p.x,
+          y: p.y,
+          vx: facing * (tx / len) * speed * 1.4,
+          vy: (ty / len) * speed * 1.4,
+          life: 0.1 + Math.random() * 0.12,
+          size: 2 + Math.random() * 2,
+          tint: t.core,
+          drag: 4,
+        });
+      }
+    }
+  }
+
+  /** A ring of disturbed energy spreading from the impact across the face of the dome. */
+  private ripple(at: Point): void {
+    const sprite = new Sprite(ringTexture());
+    sprite.anchor.set(0.5);
+    sprite.tint = this.theme.core;
+    sprite.blendMode = 'add';
+    sprite.position.set(at.x, at.y);
+    this.root.addChild(sprite);
+    this.ripples.push({ sprite, age: 0 });
+  }
+
+  /** Seen almost edge-on, a ripple is a narrow ellipse stretching up and down the dome as it spreads. */
+  private updateRipples(dt: number, ry: number): void {
+    for (let i = this.ripples.length - 1; i >= 0; i--) {
+      const r = this.ripples[i];
+      r.age += dt;
+      const k = r.age / RIPPLE_LIFE;
+      if (k >= 1) {
+        r.sprite.destroy();
+        this.ripples.splice(i, 1);
+        continue;
+      }
+      r.sprite.height = 30 + easeOut(k) * ry * 1.8;
+      r.sprite.width = 18 + easeOut(k) * 26;
+      r.sprite.alpha = (1 - k) * 0.9;
+    }
+  }
+
+  private shatter(point: (a: number) => Point, particles: Particles): void {
+    const t = this.theme;
+    if (!t.lightning) {
+      // Fire: the dome collapses in a gout of flame.
+      for (let i = 0; i < 24; i++) {
+        const p = point((Math.random() * 2 - 1) * SHIELD.sweep);
+        particles.emit({
+          x: p.x,
+          y: p.y,
+          vx: (Math.random() - 0.5) * 260,
+          vy: -(60 + Math.random() * 200),
+          life: 0.35 + Math.random() * 0.35,
+          size: 20 + Math.random() * 22,
+          tint: t.core,
+          tintEnd: EMBER_RED,
+          grow: 2.4,
+          alpha: 0.6,
+          drag: 2,
+          round: true,
+        });
+      }
+    }
+    for (let i = 0; i < 46; i++) {
+      const p = point((Math.random() * 2 - 1) * SHIELD.sweep);
+      const angle = Math.random() * Math.PI * 2;
+      const speed = 150 + Math.random() * 500;
+      particles.emit({
+        x: p.x,
+        y: p.y,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed,
+        life: 0.25 + Math.random() * 0.35,
+        size: 3 + Math.random() * 5,
+        tint: Math.random() < 0.5 ? t.core : t.body,
+        drag: 3,
+        gravity: t.lightning ? 0 : 500,
+      });
+    }
+    const c = point(0);
+    particles.emit({ x: c.x, y: c.y, vx: 0, vy: 0, life: 0.2, size: 260, tint: t.body, round: true });
+  }
+}
+
+/** A spray of sparks thrown back off a surface facing `facing`. */
+function sparksOff(particles: Particles, p: Point, facing: number, count: number, t: EnergyTheme): void {
+  for (let i = 0; i < count; i++) {
+    const angle = (Math.random() - 0.5) * 2.2;
+    const speed = 150 + Math.random() * 450;
+    particles.emit({
+      x: p.x,
+      y: p.y + (Math.random() - 0.5) * 60,
+      vx: facing * Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      life: 0.12 + Math.random() * 0.2,
+      size: 2 + Math.random() * 4,
+      tint: Math.random() < 0.5 ? t.core : t.body,
+      drag: 5,
+    });
   }
 }
 
@@ -657,6 +1113,39 @@ class ClashFx {
   }
 }
 
+/** Dirt kicked up under a fighter sliding across the ground (shoved, knocked back, or braced behind a shield). */
+const DUST = { color: 0x9a8466, dark: 0x5e4d3a, minSpeed: 1.2 } as const;
+
+function skidDust(particles: Particles, f: FighterState, dt: number): void {
+  if (!f.grounded) return;
+  const slide = f.vx + f.shove;
+  // Walking moves at a steady vx too; only count slides (shoves, knockback, blocked-hit pushback).
+  const sliding = f.shove !== 0 || f.action === 'hit' || f.action === 'block' || f.action === 'ko';
+  const speed = Math.abs(slide);
+  if (!sliding || speed < DUST.minSpeed) return;
+  const dir = Math.sign(slide);
+  let n = spawnCount(speed * 12 * dt);
+  while (n-- > 0) {
+    // From the heels, which drag; the dirt sprays up and back against the slide.
+    const heel = f.x - dir * (10 + Math.random() * 30);
+    particles.emit({
+      x: heel,
+      y: FLOOR_Y - 2 - Math.random() * 6,
+      vx: -dir * (20 + Math.random() * 60) + slide * 20,
+      vy: -(25 + Math.random() * 70),
+      life: 0.4 + Math.random() * 0.45,
+      size: 14 + Math.random() * 16,
+      tint: Math.random() < 0.6 ? DUST.color : DUST.dark,
+      grow: 2.6,
+      alpha: 0.42,
+      drag: 3,
+      gravity: 40,
+      round: true,
+      blend: 'normal',
+    });
+  }
+}
+
 /** Sparks bursting off a fighter who just lost `damage` health; big hits get a big spray. */
 function impact(particles: Particles, f: FighterState, damage: number, theme: EnergyTheme): void {
   const x = f.x + f.facing * FIGHTER_HEIGHT * 0.12;
@@ -700,6 +1189,14 @@ interface ParticleSpec {
   round?: boolean;
   /** Brighten as it lives (for sparks being drawn into a charge) instead of fading. */
   fadeIn?: boolean;
+  /** Colour it cools/shifts to by the end of its life (default: stays `tint`). */
+  tintEnd?: number;
+  /** Round puffs only: size multiplier reached at the end of life (billowing flame); 0 = shrink away. */
+  grow?: number;
+  /** Round puffs only: peak opacity. */
+  alpha?: number;
+  /** 'normal' for matter that doesn't glow (dust); energy is additive. */
+  blend?: 'add' | 'normal';
 }
 
 interface Particle extends Required<ParticleSpec> {
@@ -718,7 +1215,20 @@ class Particles {
     const sprite = this.pool.pop() ?? this.newSprite();
     sprite.visible = true;
     sprite.tint = spec.tint;
-    this.live.push({ drag: 0, gravity: 0, round: false, fadeIn: false, ...spec, sprite, maxLife: spec.life });
+    sprite.blendMode = spec.blend ?? 'add';
+    this.live.push({
+      drag: 0,
+      gravity: 0,
+      round: false,
+      fadeIn: false,
+      tintEnd: spec.tint,
+      grow: 0,
+      alpha: 0.55,
+      blend: 'add',
+      ...spec,
+      sprite,
+      maxLife: spec.life,
+    });
   }
 
   update(dt: number): void {
@@ -741,10 +1251,12 @@ class Particles {
       const left = p.life / p.maxLife;
       const sp = p.sprite;
       sp.position.set(p.x, p.y);
+      if (p.tintEnd !== p.tint) sp.tint = mixColor(p.tint, p.tintEnd, 1 - left);
       if (p.round) {
         sp.rotation = 0;
-        sp.width = sp.height = p.size * (0.4 + 0.6 * left);
-        sp.alpha = left * 0.55;
+        sp.width = sp.height = p.size * (p.grow > 0 ? 1 + (p.grow - 1) * (1 - left) : 0.4 + 0.6 * left);
+        // Billowing puffs swell in quickly then thin out; plain puffs just fade.
+        sp.alpha = p.alpha * (p.grow > 0 ? Math.min(1, (1 - left) * 6) * left : left);
       } else {
         const speed = Math.hypot(p.vx, p.vy);
         sp.rotation = Math.atan2(p.vy, p.vx);
@@ -768,10 +1280,20 @@ function lerp(a: number, b: number, t: number): number {
   return a + (b - a) * t;
 }
 
+/** Blend two 0xRRGGBB colours. */
+function mixColor(a: number, b: number, t: number): number {
+  const ch = (shift: number) => Math.round(lerp((a >> shift) & 0xff, (b >> shift) & 0xff, t)) << shift;
+  return ch(16) | ch(8) | ch(0);
+}
+
 /** Turn a fractional expected count into a whole number of spawns this frame. */
 function spawnCount(expected: number): number {
   const whole = Math.floor(expected);
   return whole + (Math.random() < expected - whole ? 1 : 0);
+}
+
+function easeOut(t: number): number {
+  return 1 - (1 - t) * (1 - t) * (1 - t);
 }
 
 function setSize(sprite: Sprite, size: number): void {

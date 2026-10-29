@@ -8,11 +8,17 @@ import {
   ENERGY_REGEN_DELAY,
   FIGHTER_HEIGHT,
   GRAVITY,
+  GUARD_HOLD_DRAIN,
+  GUARD_MAX,
+  GUARD_RAISE_MIN,
+  GUARD_REGEN,
+  GUARD_REGEN_DELAY,
   HIT_FRICTION,
   JUMP_BUFFER_TICKS,
   JUMP_VELOCITY,
   KO_RESET_TICKS,
   PROJECTILE_DESPAWN_MARGIN,
+  SHOVE_FRICTION,
   STAGE_MARGIN,
   STAGE_WIDTH,
   WALK_SPEED,
@@ -93,6 +99,8 @@ export function stepFighter(
   f.jumpBuffer = pressed('jump') ? JUMP_BUFFER_TICKS : Math.max(0, prev.jumpBuffer - 1);
   f.energyIdleTicks = Math.min(prev.energyIdleTicks + 1, COUNTER_CAP);
   if (f.energyIdleTicks >= ENERGY_REGEN_DELAY) f.energy = Math.min(ENERGY_MAX, f.energy + ENERGY_REGEN);
+  f.guardIdleTicks = Math.min(prev.guardIdleTicks + 1, COUNTER_CAP);
+  f.guardBrokenTick = Math.min(prev.guardBrokenTick + 1, COUNTER_CAP);
 
   if (f.action === 'hit') {
     f.hitstun = Math.max(0, f.hitstun - 1);
@@ -131,12 +139,27 @@ export function stepFighter(
     // Face the opponent (walking away is a backstep); alone, face the way you walk.
     if (opponentX !== undefined && opponentX !== f.x) f.facing = opponentX > f.x ? 1 : -1;
     else if (dir !== 0) f.facing = dir;
-    if (f.jumpBuffer > 0) {
+    // Keeping the shield up only needs some guard left; raising it again needs a reserve.
+    const canBlock = f.action === 'block' ? f.guard > 0 : f.guard >= GUARD_RAISE_MIN;
+    if (input.block && canBlock) {
+      // Planted behind the shield; blocked hits still slide the blocker back.
+      if (f.action !== 'block') {
+        setAction(f, 'block');
+        f.vx = 0;
+      }
+      f.vx *= HIT_FRICTION;
+      f.guard = Math.max(0, f.guard - GUARD_HOLD_DRAIN);
+      f.guardIdleTicks = 0;
+    } else if (f.jumpBuffer > 0) {
       f.jumpBuffer = 0;
       f.grounded = false;
       f.vy = JUMP_VELOCITY;
       f.vx = dir * AIR_SPEED;
       setAction(f, 'air');
+    } else if (input.down) {
+      // Ducking lasts as long as it is held; no walking while down.
+      if (f.action !== 'crouch') setAction(f, 'crouch');
+      f.vx = 0;
     } else {
       const next: Action = dir !== 0 ? 'walk' : 'idle';
       if (next !== f.action) setAction(f, next);
@@ -149,7 +172,12 @@ export function stepFighter(
     f.vx = dir * AIR_SPEED;
   }
 
-  f.x += f.vx;
+  if (f.action !== 'block' && f.guardIdleTicks >= GUARD_REGEN_DELAY) {
+    f.guard = Math.min(GUARD_MAX, f.guard + GUARD_REGEN);
+  }
+
+  f.x += f.vx + f.shove;
+  f.shove = Math.abs(f.shove) < 0.1 ? 0 : f.shove * SHOVE_FRICTION;
   if (!f.grounded) {
     f.vy -= GRAVITY;
     f.y += f.vy;

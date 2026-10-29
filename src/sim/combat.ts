@@ -1,6 +1,12 @@
 import {
   BEAM_HALF_THICKNESS,
+  BLOCK_PUSHBACK,
+  CROUCH_HURT_HEIGHT,
   FIGHTER_HEIGHT,
+  GUARD_BREAK_STUN,
+  SHIELD_OPEN_TICKS,
+  SHIELD_REACH,
+  SHOVE_SPEED,
   HURT_HALF_WIDTH,
   HURT_HEIGHT,
   PROJECTILE_RADIUS,
@@ -125,8 +131,11 @@ function strike(a: Mutable<FighterState>, v: Mutable<FighterState>): void {
     // The beam runs level from the muzzle; it stops at the near side of a body in its path.
     const { x: muzzleX, y: muzzleY } = muzzle(a);
     const ahead = a.facing * (v.x - muzzleX); // victim centre, measured along the beam
-    const contact = Math.max(0, ahead - HURT_HALF_WIDTH);
-    if (ahead > -HURT_HALF_WIDTH && muzzleY >= v.y && muzzleY <= v.y + HURT_HEIGHT && contact <= a.beamLength) {
+    // A raised shield facing the beam catches it further out than the body would.
+    const front = shielding(v, a.facing) ? SHIELD_REACH : HURT_HALF_WIDTH;
+    const contact = Math.max(0, ahead - front);
+    const box = hurtbox(v);
+    if (ahead > -HURT_HALF_WIDTH && muzzleY >= box.y0 && muzzleY <= box.y1 && contact <= a.beamLength) {
       a.beamLength = contact;
       a.beamBlocked = true;
       applyHit(v, hit, a.facing);
@@ -134,8 +143,24 @@ function strike(a: Mutable<FighterState>, v: Mutable<FighterState>): void {
   }
 }
 
-/** Damage, hitstun and knockback; a finishing blow launches the victim instead. */
+/**
+ * Damage, hitstun and knockback; a finishing blow launches the victim instead. A hit on a raised
+ * shield costs guard instead of health, and one that empties the guard breaks it.
+ */
 function applyHit(v: Mutable<FighterState>, hit: HitDef, dir: 1 | -1): void {
+  if (shielding(v, dir)) {
+    v.guard = Math.max(0, v.guard - hit.guardDamage);
+    v.guardIdleTicks = 0;
+    v.vx = dir * hit.knockback * BLOCK_PUSHBACK;
+    if (v.guard > 0) return;
+    // Guard break: the shield shatters and the fighter reels, wide open.
+    setAction(v, 'hit');
+    v.hitstun = GUARD_BREAK_STUN;
+    v.guardBrokenTick = 0;
+    v.vx = dir * hit.knockback;
+    return;
+  }
+
   v.health = Math.max(0, v.health - hit.damage);
   if (v.health === 0) {
     setAction(v, 'ko');
@@ -151,22 +176,50 @@ function applyHit(v: Mutable<FighterState>, hit: HitDef, dir: 1 | -1): void {
   if (!v.grounded) v.vy = Math.max(v.vy, 3); // a hit in the air pops the victim up slightly
 }
 
-/** Bodies can't overlap; they share the push, and one pinned against a wall pushes the other. */
+/**
+ * Bodies can't overlap. Normally they share the push. A raised shield is a solid wall at its
+ * surface that holds its ground: only the other fighter gives way, and while the shield is still
+ * unfolding it shoves them into a skid. Against a stage edge, whoever is pinned pushes the other.
+ */
 function pushApart(a: Mutable<FighterState>, b: Mutable<FighterState>): void {
   if (a.action === 'ko' || b.action === 'ko') return;
   if (Math.abs(a.y - b.y) >= HURT_HEIGHT * 0.7) return; // clearing a head is allowed: jump over
   const [left, right] = a.x <= b.x ? [a, b] : [b, a];
-  const min = PUSH_HALF_WIDTH * 2;
+  const leftWall = shieldTowards(left, right.x);
+  const rightWall = shieldTowards(right, left.x);
+  const min = reach(left, leftWall) + reach(right, rightWall);
   const overlap = min - (right.x - left.x);
   if (overlap <= 0) return;
+
+  const leftShare = leftWall === rightWall ? 0.5 : leftWall ? 0 : 1;
   const lo = STAGE_MARGIN;
   const hi = STAGE_WIDTH - STAGE_MARGIN;
-  left.x = Math.max(lo, left.x - overlap / 2);
-  right.x = Math.min(hi, right.x + overlap / 2);
+  left.x = Math.max(lo, left.x - overlap * leftShare);
+  right.x = Math.min(hi, right.x + overlap * (1 - leftShare));
   if (right.x - left.x < min) {
     if (left.x <= lo) right.x = left.x + min;
     else left.x = right.x - min;
   }
+
+  // An unfolding shield throws a close opponent back.
+  if (leftWall && !rightWall && opening(left)) right.shove = Math.max(right.shove, SHOVE_SPEED);
+  if (rightWall && !leftWall && opening(right)) left.shove = Math.min(left.shove, -SHOVE_SPEED);
+}
+
+/** Does `f` have a shield raised toward something at `x`? */
+function shieldTowards(f: FighterState, x: number): boolean {
+  return f.action === 'block' && (x - f.x) * f.facing > 0;
+}
+
+function opening(f: FighterState): boolean {
+  return f.actionTick < SHIELD_OPEN_TICKS;
+}
+
+/** How far in front of its centre a body holds the other off: its own width, or its shield as it unfolds. */
+function reach(f: FighterState, shielded: boolean): number {
+  if (!shielded) return PUSH_HALF_WIDTH;
+  const open = Math.min(1, (f.actionTick + 1) / SHIELD_OPEN_TICKS);
+  return PUSH_HALF_WIDTH + (SHIELD_REACH - PUSH_HALF_WIDTH) * open;
 }
 
 /** A beam in its active phase with some length out. */
@@ -194,8 +247,21 @@ function muzzle(f: FighterState): { x: number; y: number } {
   return { x: f.x + f.facing * MUZZLE.x * FIGHTER_HEIGHT, y: f.y + MUZZLE.y * FIGHTER_HEIGHT };
 }
 
+/** Is `f` holding a shield up against an attack travelling in direction `dir`? */
+function shielding(f: FighterState, dir: 1 | -1): boolean {
+  return f.action === 'block' && f.facing === -dir;
+}
+
+/** The body, lower when ducking. A raised shield extends it forward, so attacks meet the shield first. */
 function hurtbox(f: FighterState): Box {
-  return { x0: f.x - HURT_HALF_WIDTH, x1: f.x + HURT_HALF_WIDTH, y0: f.y, y1: f.y + HURT_HEIGHT };
+  const height = f.action === 'crouch' ? CROUCH_HURT_HEIGHT : HURT_HEIGHT;
+  let x0 = f.x - HURT_HALF_WIDTH;
+  let x1 = f.x + HURT_HALF_WIDTH;
+  if (f.action === 'block') {
+    if (f.facing > 0) x1 = f.x + SHIELD_REACH;
+    else x0 = f.x - SHIELD_REACH;
+  }
+  return { x0, x1, y0: f.y, y1: f.y + height };
 }
 
 function around(p: ProjectileState): Box {

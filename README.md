@@ -9,10 +9,14 @@ npm run dev        # http://localhost:5173
 
 Two players on one keyboard:
 
-| | move | jump | kick | blast | beam (hold) | switch fighter (dev only) |
-|---|---|---|---|---|---|---|
-| P1 | A / D | W, Space | K | J | L | C |
-| P2 | ← / → | ↑ | `.` (Num2) | `,` (Num1) | `/` (Num3) | M |
+| | move | jump | duck (hold) | kick | blast | beam (hold) | block (hold) | switch fighter (dev only) |
+|---|---|---|---|---|---|---|---|---|
+| P1 | A / D | W, Space | S | K | J | L | I | C |
+| P2 | ← / → | ↑ | ↓ | `.` (Num2) | `,` (Num1) | `/` (Num3) | Right Shift (Num0) | M |
+
+Ducking slips under blasts and beams but kicks still land. Blocking raises a shield that stops
+everything but drains the guard meter (blocked hits, and slowly just holding it); an empty guard
+breaks and leaves you stunned, and the shield can't go back up until the guard refills past the notch.
 
 Pick characters by URL: `?p1=maroon&p2=navy`. H toggles the controls strip.
 
@@ -25,7 +29,8 @@ reads `images/` (never modified) and writes `public/assets/`:
   bands, not a fixed grid), magenta keyed out with edge un-mixing and despill (no halo), all on one
   466x352 canvas with feet on a shared baseline and the anchor at the middle of the feet.
   Frame names: `idle_stance idle_breathe walk_1 walk_2 punch_windup punch_extend kick_windup
-  kick_high blast_charge blast_release jump_air hit_recoil`.
+  kick_high blast_charge blast_release jump_air hit_recoil`, plus `block` and `duck` taken from
+  the shared defense-poses sheet and rescaled to match (block is matched to `punch_windup`).
 - `stages/valley.png`: the background.
 
 `node scripts/build-sprites.mjs --debug <dir>` writes a preview of the frames over green with

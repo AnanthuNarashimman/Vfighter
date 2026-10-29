@@ -42,6 +42,8 @@ export interface MoveDef {
 
 export interface HitDef {
   readonly damage: number;
+  /** Guard lost when the hit is blocked instead (no health is lost). */
+  readonly guardDamage: number;
   /** Ticks the victim is stunned (cannot act). */
   readonly hitstun: number;
   /** Victim's push-away speed, px per tick. */
@@ -65,7 +67,7 @@ const MOVE_TABLE = {
     lunge: [5, 4, 3, 2, 1],
     // The high kick reaches out at chest-to-head height (measured from the kick_high frame).
     // Hitstun is short enough that the victim recovers before a repeated kick can land again.
-    hit: { damage: 65, hitstun: 14, knockback: 7, hitbox: { x0: 0.1, x1: 0.62, y0: 0.45, y1: 0.95 } },
+    hit: { damage: 65, guardDamage: 18, hitstun: 14, knockback: 7, hitbox: { x0: 0.1, x1: 0.62, y0: 0.45, y1: 0.95 } },
   },
   blast: {
     button: 'blast',
@@ -78,7 +80,7 @@ const MOVE_TABLE = {
     energyCost: 25,
     lunge: [-4, -3, -2, -1],
     projectile: { speed: 16 },
-    hit: { damage: 80, hitstun: 22, knockback: 8 },
+    hit: { damage: 80, guardDamage: 26, hitstun: 22, knockback: 8 },
   },
   beam: {
     button: 'beam',
@@ -92,8 +94,9 @@ const MOVE_TABLE = {
     drainPerTick: 0.75,
     activeDrift: -0.25,
     beam: { growPerTick: 48 },
-    // Per tick of contact; holding a full gauge's worth on someone takes about a quarter of their health.
-    hit: { damage: 2, hitstun: 10, knockback: 2.5 },
+    // Per tick of contact; holding a full gauge's worth on someone takes about a quarter of their
+    // health. Against a shield it grinds the guard down in about 1.5 seconds: a beam breaks a turtle.
+    hit: { damage: 2, guardDamage: 1.1, hitstun: 10, knockback: 2.5 },
   },
 } as const satisfies Record<string, MoveDef>;
 

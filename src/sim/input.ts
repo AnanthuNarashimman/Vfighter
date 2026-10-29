@@ -7,9 +7,13 @@ export interface InputFrame {
   readonly left: boolean;
   readonly right: boolean;
   readonly jump: boolean;
+  /** Duck while held. */
+  readonly down: boolean;
   readonly kick: boolean;
   readonly blast: boolean;
   readonly beam: boolean;
+  /** Raise the shield while held. */
+  readonly block: boolean;
 }
 
 export type Button = keyof InputFrame;
@@ -18,12 +22,14 @@ export const NO_INPUT: InputFrame = Object.freeze({
   left: false,
   right: false,
   jump: false,
+  down: false,
   kick: false,
   blast: false,
   beam: false,
+  block: false,
 });
 
-const BITS: readonly Button[] = ['left', 'right', 'jump', 'kick', 'blast', 'beam'];
+const BITS: readonly Button[] = ['left', 'right', 'jump', 'kick', 'blast', 'beam', 'down', 'block'];
 
 /** Pack into a small integer (for network packets / replays). */
 export function encodeInput(input: InputFrame): number {

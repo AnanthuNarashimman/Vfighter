@@ -15,6 +15,19 @@ import { PNG } from 'pngjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
+/**
+ * Extra poses drawn on their own sheet, at a different size from the main sheets. `cells` picks
+ * figures (reading order) for each frame name; the figures are rescaled so that `match[0]` (a cell
+ * frame) comes out the same height as `match[1]` (a main-sheet frame of a similar pose).
+ */
+const DEFENSE_SHEET = {
+  sheet: 'images/Martial Artists in Dynamic Combat Poses.png',
+  rows: 2,
+  cols: 2,
+  // The block guard is the same wide, upright fighting stance as the punch wind-up.
+  match: ['block', 'punch_windup'],
+};
+
 const CONFIG = {
   fighters: [
     {
@@ -32,6 +45,7 @@ const CONFIG = {
       standingFrame: 'idle_stance',
       // Optional manual nudges (source px) if the auto anchor of a frame looks off: { walk_1: { dx: -4 } }
       anchorNudge: {},
+      extras: [{ ...DEFENSE_SHEET, cells: { block: 0, duck: 1 } }],
     },
     {
       id: 'navy',
@@ -46,6 +60,7 @@ const CONFIG = {
       ],
       standingFrame: 'idle_stance',
       anchorNudge: {},
+      extras: [{ ...DEFENSE_SHEET, cells: { block: 2, duck: 3 } }],
     },
   ],
   stages: [{ id: 'valley', image: 'images/Serene Fantasy Valley Panorama.png' }],
@@ -61,6 +76,8 @@ const args = process.argv.slice(2);
 const ifStale = args.includes('--if-stale');
 const debugDir = args.includes('--debug') ? path.resolve(args[args.indexOf('--debug') + 1] ?? 'sprite-debug') : null;
 const scriptMtime = fs.statSync(fileURLToPath(import.meta.url)).mtimeMs;
+/** Keyed sheets by path, so a sheet shared by several fighters is processed once. */
+const keyedCache = new Map();
 
 for (const fighter of CONFIG.fighters) buildFighter(fighter);
 for (const stage of CONFIG.stages) copyStage(stage);
@@ -68,46 +85,48 @@ for (const stage of CONFIG.stages) copyStage(stage);
 // ---------------------------------------------------------------------------
 
 function buildFighter(cfg) {
-  const src = path.join(ROOT, cfg.sheet);
+  const extras = cfg.extras ?? [];
+  const inputs = [cfg.sheet, ...extras.map((e) => e.sheet)].map((s) => path.join(ROOT, s));
   const outDir = path.join(ROOT, CONFIG.outDir, 'fighters');
   const outPng = path.join(outDir, `${cfg.id}.png`);
   const outJson = path.join(outDir, `${cfg.id}.json`);
-  if (ifStale && isFresh([outPng, outJson], [src])) {
+  if (ifStale && isFresh([outPng, outJson], inputs)) {
     console.log(`[sprites] ${cfg.id}: up to date`);
     return;
   }
 
-  const sheet = PNG.sync.read(fs.readFileSync(src));
-  const { width: W, height: H } = sheet;
-  const rgba = sheet.data;
-
-  // 1. Background removal -> straight-alpha RGBA (copy, the source buffer is not touched).
-  const bg = estimateBackground(rgba, W, H);
-  const out = removeBackground(rgba, W, H, bg);
-  removeSpecks(out, W, H, CONFIG.minSpeck);
-
-  // 2. Find the 12 figures: split by empty rows/columns instead of assuming an even grid.
-  const solid = (x, y) => out[(y * W + x) * 4 + 3] >= 128;
-  const rowBands = splitBands(projection(H, (y) => countRow(solid, W, y)), cfg.rows, 'rows');
-  const boxes = [];
-  for (const [y0, y1] of rowBands) {
-    const colCounts = projection(W, (x) => {
-      let n = 0;
-      for (let y = y0; y <= y1; y++) if (solid(x, y)) n++;
-      return n;
-    });
-    for (const [x0, x1] of splitBands(colCounts, cfg.cols, 'columns')) boxes.push(tightBox(solid, x0, y0, x1, y1));
+  // 1-2. Key out the background and find the figures (empty row/column bands, not an even grid).
+  // Each figure carries its own pixels: { px, stride, x0, y0, x1, y1 } with inclusive bounds.
+  const main = keyedSheet(cfg.sheet);
+  const mainBoxes = findFigures(main, cfg.rows, cfg.cols);
+  if (mainBoxes.length !== cfg.frames.length) {
+    throw new Error(`found ${mainBoxes.length} figures, expected ${cfg.frames.length}`);
   }
-  if (boxes.length !== cfg.frames.length) throw new Error(`found ${boxes.length} figures, expected ${cfg.frames.length}`);
+  const names = [...cfg.frames];
+  const boxes = mainBoxes.map((b) => ({ ...b, px: main.px, stride: main.W }));
+
+  // Extra sheets: pick cells, rescale so the matched pose is as tall as its main-sheet counterpart.
+  for (const extra of extras) {
+    const sheet = keyedSheet(extra.sheet);
+    const cells = findFigures(sheet, extra.rows, extra.cols);
+    const [cellFrame, mainFrame] = extra.match;
+    const scale = height(mainBoxes[cfg.frames.indexOf(mainFrame)]) / height(cells[extra.cells[cellFrame]]);
+    for (const [name, cell] of Object.entries(extra.cells)) {
+      names.push(name);
+      boxes.push(scaleFigure(sheet.px, sheet.W, cells[cell], scale));
+    }
+    console.log(`[sprites] ${cfg.id}: ${Object.keys(extra.cells).join(', ')} from ${extra.sheet} at x${scale.toFixed(3)}`);
+  }
 
   // 3. Anchor each figure: feet baseline = lowest solid row; horizontal anchor = middle of the feet.
   boxes.forEach((b, i) => {
+    const solid = (x, y) => b.px[(y * b.stride + x) * 4 + 3] >= 128;
     const footRows = Math.max(4, Math.round((b.y1 - b.y0 + 1) * 0.06));
     let minX = Infinity, maxX = -Infinity;
     for (let y = b.y1 - footRows + 1; y <= b.y1; y++) {
       for (let x = b.x0; x <= b.x1; x++) if (solid(x, y)) { minX = Math.min(minX, x); maxX = Math.max(maxX, x); }
     }
-    b.ax = Math.round((minX + maxX) / 2) + (cfg.anchorNudge[cfg.frames[i]]?.dx ?? 0);
+    b.ax = Math.round((minX + maxX) / 2) + (cfg.anchorNudge[names[i]]?.dx ?? 0);
     b.base = b.y1;
   });
 
@@ -138,16 +157,16 @@ function buildFighter(cfg) {
     const oy = fy + baselineY - 1 - b.base;
     for (let y = b.y0; y <= b.y1; y++) {
       for (let x = b.x0; x <= b.x1; x++) {
-        const s = (y * W + x) * 4;
-        if (out[s + 3] === 0) continue;
+        const s = (y * b.stride + x) * 4;
+        if (b.px[s + 3] === 0) continue;
         const d = ((y + oy) * aw + (x + ox)) * 4;
-        atlas.data[d] = out[s];
-        atlas.data[d + 1] = out[s + 1];
-        atlas.data[d + 2] = out[s + 2];
-        atlas.data[d + 3] = out[s + 3];
+        atlas.data[d] = b.px[s];
+        atlas.data[d + 1] = b.px[s + 1];
+        atlas.data[d + 2] = b.px[s + 2];
+        atlas.data[d + 3] = b.px[s + 3];
       }
     }
-    frames[cfg.frames[i]] = {
+    frames[names[i]] = {
       frame: { x: fx, y: fy, w: fw, h: fh },
       rotated: false,
       trimmed: false,
@@ -157,7 +176,7 @@ function buildFighter(cfg) {
     };
   });
 
-  const standing = boxes[cfg.frames.indexOf(cfg.standingFrame)];
+  const standing = boxes[names.indexOf(cfg.standingFrame)];
   const json = {
     frames,
     meta: {
@@ -171,7 +190,7 @@ function buildFighter(cfg) {
         frameSize: { w: fw, h: fh },
         anchor: { x: 0.5, y: baselineY / fh },
         standingHeight: standing.base - standing.y0 + 1,
-        background: bg.color,
+        background: main.bg.color,
       },
     },
   };
@@ -180,13 +199,84 @@ function buildFighter(cfg) {
   fs.writeFileSync(outPng, PNG.sync.write(atlas));
   fs.writeFileSync(outJson, JSON.stringify(json, null, 2));
   console.log(
-    `[sprites] ${cfg.id}: bg rgb(${bg.color.join(',')}), ${boxes.length} frames of ${fw}x${fh}, atlas ${aw}x${ah}`,
+    `[sprites] ${cfg.id}: bg rgb(${main.bg.color.join(',')}), ${boxes.length} frames of ${fw}x${fh}, atlas ${aw}x${ah}`,
   );
   boxes.forEach((b, i) =>
-    console.log(`  ${cfg.frames[i].padEnd(14)} box ${b.x0},${b.y0} ${b.x1 - b.x0 + 1}x${b.y1 - b.y0 + 1}  anchor x=${b.ax}`),
+    console.log(`  ${names[i].padEnd(14)} box ${b.x0},${b.y0} ${b.x1 - b.x0 + 1}x${b.y1 - b.y0 + 1}  anchor x=${b.ax}`),
   );
 
   if (debugDir) writeDebugPreview(atlas, json, path.join(debugDir, `${cfg.id}-preview.png`));
+}
+
+/** A sheet with its background keyed out (straight-alpha copy; the source file is never touched). Cached per run. */
+function keyedSheet(file) {
+  const hit = keyedCache.get(file);
+  if (hit) return hit;
+  const sheet = PNG.sync.read(fs.readFileSync(path.join(ROOT, file)));
+  const { width: W, height: H } = sheet;
+  const bg = estimateBackground(sheet.data, W, H);
+  const px = removeBackground(sheet.data, W, H, bg);
+  removeSpecks(px, W, H, CONFIG.minSpeck);
+  const keyed = { px, W, H, bg };
+  keyedCache.set(file, keyed);
+  return keyed;
+}
+
+/** Tight boxes of the rows x cols figures, in reading order. */
+function findFigures({ px, W, H }, rows, cols) {
+  const solid = (x, y) => px[(y * W + x) * 4 + 3] >= 128;
+  const boxes = [];
+  for (const [y0, y1] of splitBands(projection(H, (y) => countRow(solid, W, y)), rows, 'rows')) {
+    const colCounts = projection(W, (x) => {
+      let n = 0;
+      for (let y = y0; y <= y1; y++) if (solid(x, y)) n++;
+      return n;
+    });
+    for (const [x0, x1] of splitBands(colCounts, cols, 'columns')) boxes.push(tightBox(solid, x0, y0, x1, y1));
+  }
+  return boxes;
+}
+
+function height(b) {
+  return b.y1 - b.y0 + 1;
+}
+
+/**
+ * Crop a figure and resize it by `s` with an area-weighted (box) filter in premultiplied alpha, so
+ * edges stay clean. Returns a figure with its own buffer.
+ */
+function scaleFigure(px, W, b, s) {
+  const bw = b.x1 - b.x0 + 1;
+  const bh = b.y1 - b.y0 + 1;
+  const w = Math.max(1, Math.round(bw * s));
+  const h = Math.max(1, Math.round(bh * s));
+  const sx = bw / w;
+  const sy = bh / h;
+  const out = new Uint8Array(w * h * 4);
+  for (let y = 0; y < h; y++) {
+    const fy0 = y * sy, fy1 = fy0 + sy;
+    for (let x = 0; x < w; x++) {
+      const fx0 = x * sx, fx1 = fx0 + sx;
+      let r = 0, g = 0, bl = 0, a = 0, area = 0;
+      for (let yy = Math.floor(fy0); yy < Math.ceil(fy1); yy++) {
+        const wy = Math.min(fy1, yy + 1) - Math.max(fy0, yy);
+        for (let xx = Math.floor(fx0); xx < Math.ceil(fx1); xx++) {
+          const wgt = wy * (Math.min(fx1, xx + 1) - Math.max(fx0, xx));
+          const i = ((b.y0 + yy) * W + b.x0 + xx) * 4;
+          const al = (px[i + 3] / 255) * wgt;
+          r += px[i] * al; g += px[i + 1] * al; bl += px[i + 2] * al; a += al; area += wgt;
+        }
+      }
+      const o = (y * w + x) * 4;
+      if (a > 0) {
+        out[o] = Math.round(r / a); out[o + 1] = Math.round(g / a); out[o + 2] = Math.round(bl / a);
+        out[o + 3] = Math.round((a / area) * 255);
+      }
+    }
+  }
+  // Recompute the tight box in the new buffer (resampling can leave a faint empty edge).
+  const solid = (x, y) => out[(y * w + x) * 4 + 3] >= 128;
+  return { ...tightBox(solid, 0, 0, w - 1, h - 1), px: out, stride: w };
 }
 
 function copyStage(stage) {
