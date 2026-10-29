@@ -23,7 +23,8 @@ import {
   STAGE_WIDTH,
   WALK_SPEED,
 } from './constants';
-import { resolveCombat } from './combat';
+import { stepCataclysms } from './cataclysm';
+import { resolveCombat, strikeHits } from './combat';
 import { NO_INPUT, type Button, type InputFrame } from './input';
 import { MOVES, MOVE_PRIORITY, MUZZLE, isMoveId, phaseAt, sustainEndTick, type MoveId } from './moves';
 import {
@@ -44,7 +45,9 @@ export type ProjectileSpawn = Pick<ProjectileState, 'x' | 'y' | 'vx'>;
  * input state is never mutated. `inputs[i]` belongs to `state.fighters[i]`.
  */
 export function step(state: GameState, inputs: readonly InputFrame[]): GameState {
-  if (state.ko && state.ko.tick >= KO_RESET_TICKS) return createInitialState(state.rngSeed, state.nextProjectileId);
+  if (state.ko && state.ko.tick >= KO_RESET_TICKS) {
+    return createInitialState(state.rngSeed, state.nextProjectileId, state.fighters.map((f) => f.element));
+  }
 
   const spawned: ProjectileState[] = [];
   let nextId = state.nextProjectileId;
@@ -65,6 +68,9 @@ export function step(state: GameState, inputs: readonly InputFrame[]): GameState
     clashes.push({ ...c, id: tick * 16 + (clashes.length % 16), tick }),
   );
 
+  const supers = stepCataclysms(state.cataclysms, state.strikes, fighters, state.rngSeed, nextId, state.ko !== null);
+  const strikes = strikeHits(fighters, supers.strikes);
+
   let ko = state.ko && { ...state.ko, tick: state.ko.tick + 1 };
   if (!ko && fighters.some((f) => f.health <= 0)) {
     const standing = fighters.map((f, i) => (f.health > 0 ? i : -1)).filter((i) => i >= 0);
@@ -73,11 +79,13 @@ export function step(state: GameState, inputs: readonly InputFrame[]): GameState
 
   return {
     tick,
-    rngSeed: state.rngSeed,
+    rngSeed: supers.rngSeed,
     fighters,
     projectiles,
-    nextProjectileId: nextId,
+    nextProjectileId: supers.nextId,
     clashes,
+    cataclysms: supers.cataclysms,
+    strikes,
     ko,
   };
 }
@@ -101,6 +109,7 @@ export function stepFighter(
   if (f.energyIdleTicks >= ENERGY_REGEN_DELAY) f.energy = Math.min(ENERGY_MAX, f.energy + ENERGY_REGEN);
   f.guardIdleTicks = Math.min(prev.guardIdleTicks + 1, COUNTER_CAP);
   f.guardBrokenTick = Math.min(prev.guardBrokenTick + 1, COUNTER_CAP);
+  f.strikeGrace = Math.max(0, prev.strikeGrace - 1);
 
   if (f.action === 'hit') {
     f.hitstun = Math.max(0, f.hitstun - 1);
@@ -213,6 +222,7 @@ function beamReach(f: FighterState): number {
 
 function tryStartMove(f: Mutable<FighterState>, id: MoveId): boolean {
   const move = MOVES[id];
+  if (move.element && move.element !== f.element) return false;
   if (!f.grounded && !move.allowedInAir) return false;
   const cost = move.energyCost ?? 0;
   if (f.energy < cost + (move.drainPerTick ?? 0)) return false;

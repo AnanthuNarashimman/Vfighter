@@ -80,6 +80,58 @@ export const HIT_FRICTION = 0.82;
 /** After a KO the round freezes for this many ticks, then restarts. */
 export const KO_RESET_TICKS = 240;
 
+/**
+ * A cataclysm (a super): for `ticks` the element strikes the stage at random spots, every
+ * `interval` ticks or so, `aim` of them near the opponent (within `aimSpread` px). Each strike
+ * warns for `warnTicks` (fair warning), is dangerous for `activeTicks` (a column `halfWidth`
+ * either side of its x, from the floor up to `height`), then dies down over `fadeTicks`.
+ */
+export interface CataclysmDef {
+  readonly ticks: number;
+  readonly interval: { readonly min: number; readonly max: number };
+  readonly aim: number;
+  readonly aimSpread: number;
+  readonly warnTicks: number;
+  readonly activeTicks: number;
+  readonly fadeTicks: number;
+  readonly halfWidth: number;
+  readonly height: number;
+}
+
+/**
+ * After a strike hits someone, no strike of any super can hit them again for this long: they get a
+ * chance to land and get clear instead of being juggled from one strike into the next.
+ */
+export const STRIKE_GRACE_TICKS = 70;
+
+export const CATACLYSMS: Readonly<Record<'fire' | 'thunder', CataclysmDef>> = {
+  // Inferno: the ground cracks, glows, and erupts in a roaring lava column.
+  fire: {
+    ticks: 540,
+    interval: { min: 20, max: 44 },
+    aim: 0.42,
+    aimSpread: 120,
+    warnTicks: 42,
+    activeTicks: 26,
+    fadeTicks: 50,
+    halfWidth: 46,
+    height: 380,
+  },
+  // Tempest: static gathers on a spot, then lightning slams down from the clouds. Quicker and more
+  // frequent than eruptions, and over in an instant, so it is thinner and hits a little less hard.
+  thunder: {
+    ticks: 540,
+    interval: { min: 14, max: 32 },
+    aim: 0.5,
+    aimSpread: 110,
+    warnTicks: 32,
+    activeTicks: 8,
+    fadeTicks: 30,
+    halfWidth: 34,
+    height: 2000,
+  },
+};
+
 /** Projectiles are removed once this far outside the stage. */
 export const PROJECTILE_DESPAWN_MARGIN = 400;
 export const BEAM_MAX_LENGTH = 1800;

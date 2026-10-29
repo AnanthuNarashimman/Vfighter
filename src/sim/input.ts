@@ -14,6 +14,8 @@ export interface InputFrame {
   readonly beam: boolean;
   /** Raise the shield while held. */
   readonly block: boolean;
+  /** Unleash the character's super (needs a full energy gauge). */
+  readonly super: boolean;
 }
 
 export type Button = keyof InputFrame;
@@ -27,9 +29,10 @@ export const NO_INPUT: InputFrame = Object.freeze({
   blast: false,
   beam: false,
   block: false,
+  super: false,
 });
 
-const BITS: readonly Button[] = ['left', 'right', 'jump', 'kick', 'blast', 'beam', 'down', 'block'];
+const BITS: readonly Button[] = ['left', 'right', 'jump', 'kick', 'blast', 'beam', 'down', 'block', 'super'];
 
 /** Pack into a small integer (for network packets / replays). */
 export function encodeInput(input: InputFrame): number {

@@ -1,5 +1,8 @@
 import type { Button } from './input';
 
+/** A fighter's element decides which super it has. */
+export type Element = 'fire' | 'thunder';
+
 /**
  * Data-driven move definitions. A move is a sequence of timed phases; while a move runs the fighter
  * cannot walk or start another move. Add new moves here and give them frames in
@@ -38,6 +41,10 @@ export interface MoveDef {
    * once per move (through `hitbox`); a blast through its projectile.
    */
   readonly hit?: HitDef;
+  /** Only fighters of this element have the move. */
+  readonly element?: Element;
+  /** Unleashes the fighter's element as a cataclysm on the first active tick (see cataclysm.ts). */
+  readonly cataclysm?: boolean;
 }
 
 export interface HitDef {
@@ -53,7 +60,21 @@ export interface HitDef {
    * centre, y above the feet. Moves that hit through a projectile or beam have none.
    */
   readonly hitbox?: { readonly x0: number; readonly x1: number; readonly y0: number; readonly y1: number };
+  /** Throws the victim up at this speed (px per tick) instead of just sliding them. */
+  readonly launch?: number;
+  /** Comes from somewhere a shield can't face (the ground): ignores blocking. */
+  readonly unblockable?: boolean;
 }
+
+/**
+ * What a cataclysm's strike does. Both come from where a shield can't face. A lava column bursting
+ * up under the opponent: heavy, and launches. A lightning bolt from above: a little lighter, but
+ * the shock locks them up longer and only jolts them off their feet.
+ */
+export const STRIKE_HITS: Readonly<Record<Element, HitDef>> = {
+  fire: { damage: 62, guardDamage: 0, hitstun: 30, knockback: 5, launch: 12, unblockable: true },
+  thunder: { damage: 56, guardDamage: 0, hitstun: 40, knockback: 3, launch: 5, unblockable: true },
+};
 
 const MOVE_TABLE = {
   kick: {
@@ -98,12 +119,38 @@ const MOVE_TABLE = {
     // health. Against a shield it grinds the guard down in about 1.5 seconds: a beam breaks a turtle.
     hit: { damage: 2, guardDamage: 1.1, hitstun: 10, knockback: 2.5 },
   },
+  // Fire's super, Inferno: gather the heat (interruptible), then thrust it into the ground to wake the volcano.
+  super: {
+    button: 'super',
+    phases: [
+      { phase: 'startup', ticks: 36 },
+      { phase: 'active', ticks: 10 },
+      { phase: 'recovery', ticks: 22 },
+    ],
+    allowedInAir: false,
+    energyCost: 100,
+    element: 'fire',
+    cataclysm: true,
+  },
+  // Thunder's super, Tempest: draw the charge up (interruptible), then call the storm down.
+  storm: {
+    button: 'super',
+    phases: [
+      { phase: 'startup', ticks: 36 },
+      { phase: 'active', ticks: 10 },
+      { phase: 'recovery', ticks: 22 },
+    ],
+    allowedInAir: false,
+    energyCost: 100,
+    element: 'thunder',
+    cataclysm: true,
+  },
 } as const satisfies Record<string, MoveDef>;
 
 export type MoveId = keyof typeof MOVE_TABLE;
 export const MOVES: Readonly<Record<MoveId, MoveDef>> = MOVE_TABLE;
 /** Checked in this order when several buttons are pressed on the same tick. */
-export const MOVE_PRIORITY: readonly MoveId[] = ['kick', 'blast', 'beam'];
+export const MOVE_PRIORITY: readonly MoveId[] = ['super', 'storm', 'kick', 'blast', 'beam'];
 
 /**
  * Where energy leaves the hand in the release pose, as fractions of FIGHTER_HEIGHT

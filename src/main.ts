@@ -5,8 +5,11 @@ import { CHARACTERS } from './render/characters';
 import { EnergyView } from './render/energyView';
 import { FighterView } from './render/fighterView';
 import { Hud } from './render/hud';
+import { multiplyColor } from './render/fx';
+import { InfernoView } from './render/infernoView';
 import { computeLayout } from './render/layout';
 import { StageBackground } from './render/stageView';
+import { StormView } from './render/stormView';
 import { createInitialState } from './sim/state';
 
 const ASSETS = import.meta.env.BASE_URL + 'assets/';
@@ -35,15 +38,24 @@ async function main(): Promise<void> {
   const world = new Container();
   const fightersLayer = new Container();
   const energy = new EnergyView();
-  world.addChild(energy.ground, fightersLayer, energy.root);
+  // The supers: Inferno (fire) and Tempest (thunder) each light, darken and shake the whole scene.
+  const inferno = new InfernoView();
+  const storm = new StormView();
+  world.addChild(storm.back, inferno.back, energy.ground, fightersLayer, energy.root, inferno.front, storm.front);
   const hud = new Hud();
-  app.stage.addChild(background.sprite, world, hud.root);
+  app.stage.addChild(background.sprite, storm.sky, inferno.sky, world, storm.overlay, inferno.flash, hud.root);
 
+  let worldX = 0;
+  let worldY = 0;
   const applyLayout = (): void => {
     const view = computeLayout(window.innerWidth, window.innerHeight);
     app.renderer.resize(view.width, view.height);
-    world.position.set(view.worldX, view.worldY);
+    worldX = view.worldX;
+    worldY = view.worldY;
+    world.position.set(worldX, worldY);
     background.layout(view);
+    inferno.layout(view);
+    storm.layout(view);
     hud.layout(view);
   };
   applyLayout();
@@ -73,6 +85,8 @@ async function main(): Promise<void> {
     views[player].setSheet(sheets[picks[player]] as Spritesheet);
     energy.setStyle(player, character.energy);
     hud.setCharacter(player, character);
+    // The element is gameplay (it decides the super), so the simulation needs it too.
+    session.setElement(player, character.energy);
   };
   views.forEach((_, i) => applyCharacter(i));
   if (import.meta.env.DEV) {
@@ -91,9 +105,21 @@ async function main(): Promise<void> {
   app.ticker.add((ticker) => {
     const alpha = session.advance(ticker.deltaMS);
     const { previous, current } = session;
-    current.fighters.forEach((f, i) => views[i].update(previous.fighters[i], f, alpha, ticker.deltaMS));
+    inferno.update(previous, current, alpha, ticker.deltaMS);
+    storm.update(previous, current, alpha, ticker.deltaMS);
+    background.sprite.tint = multiplyColor(inferno.backgroundTint(), storm.backgroundTint());
+    const light = multiplyColor(inferno.fighterTint(), storm.fighterTint());
+    current.fighters.forEach((f, i) => {
+      views[i].setAmbient(light);
+      views[i].update(previous.fighters[i], f, alpha, ticker.deltaMS);
+    });
     energy.update(previous, current, alpha, ticker.deltaMS);
     hud.update(ticker, current);
+    // Camera shake moves the world and the stage together (the HUD stays put).
+    const a = inferno.shake();
+    const b = storm.shake();
+    world.position.set(worldX + a.x + b.x, worldY + a.y + b.y);
+    background.shake(a.x + b.x, a.y + b.y);
   });
 }
 

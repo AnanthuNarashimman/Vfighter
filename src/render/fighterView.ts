@@ -45,6 +45,8 @@ export class FighterView {
   /** Health seen last frame (tracked here, not from `prev`, so hits in multi-tick frames still show). */
   private lastHealth = Infinity;
   private flashMs = 0;
+  /** Light the fighter stands in (e.g. warm lava glow); multiplies the sprite. */
+  private ambient = 0xffffff;
 
   constructor(sheet: Spritesheet) {
     this.contactShadow = new Sprite(softBlobTexture());
@@ -57,6 +59,10 @@ export class FighterView {
     this.sprite = new Sprite();
     this.root.addChild(this.castShadow, this.contactShadow, this.sprite);
     this.setSheet(sheet);
+  }
+
+  setAmbient(tint: number): void {
+    this.ambient = tint;
   }
 
   /** Swap the character's art; takes effect on the next update. */
@@ -79,7 +85,7 @@ export class FighterView {
     if (curr.health < this.lastHealth) this.flashMs = HIT_FLASH_MS;
     this.lastHealth = curr.health;
     this.flashMs = Math.max(0, this.flashMs - deltaMs);
-    this.sprite.tint = this.flashMs > 0 ? HIT_FLASH_TINT : 0xffffff;
+    this.sprite.tint = this.flashMs > 0 ? HIT_FLASH_TINT : this.ambient;
     if (this.flashMs > 0) x += (Math.random() - 0.5) * 2 * HIT_SHAKE_PX * (this.flashMs / HIT_FLASH_MS);
 
     const tex = this.textures[frameFor(curr) satisfies FrameName];

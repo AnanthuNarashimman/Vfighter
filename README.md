@@ -9,10 +9,21 @@ npm run dev        # http://localhost:5173
 
 Two players on one keyboard:
 
-| | move | jump | duck (hold) | kick | blast | beam (hold) | block (hold) | switch fighter (dev only) |
-|---|---|---|---|---|---|---|---|---|
-| P1 | A / D | W, Space | S | K | J | L | I | C |
-| P2 | ← / → | ↑ | ↓ | `.` (Num2) | `,` (Num1) | `/` (Num3) | Right Shift (Num0) | M |
+| | move | jump | duck (hold) | kick | blast | beam (hold) | block (hold) | super | switch fighter (dev only) |
+|---|---|---|---|---|---|---|---|---|---|
+| P1 | A / D | W, Space | S | K | J | L | I | O | C |
+| P2 | ← / → | ↑ | ↓ | `.` (Num2) | `,` (Num1) | `/` (Num3) | Right Shift (Num0) | Enter | M |
+
+**Supers** need a full energy gauge (and spend it all); a hit during the wind-up cancels them
+(the energy is still spent). Each runs for 9 seconds, striking at random spots, about half the
+time near the opponent. Shields can't stop the strikes, but each one is telegraphed, and the
+caster is never hurt by their own.
+
+- **Inferno** (FLASH, fire): the stage burns. Each eruption glows and smokes as a crack for ~0.7s,
+  then a lava column blasts up, launching anyone in it for heavy damage.
+- **Tempest** (VOLT, thunder): the sky goes dark with storm clouds and rain. Each strike gathers as
+  static on the ground for ~0.5s, then lightning slams down, electrocuting anyone there (a little
+  less damage, a longer stun). Strikes come more often than eruptions.
 
 Ducking slips under blasts and beams but kicks still land. Blocking raises a shield that stops
 everything but drains the guard meter (blocked hits, and slowly just holding it); an empty guard
@@ -43,6 +54,7 @@ src/sim/        pure, deterministic simulation (no Pixi, DOM, clocks or Math.ran
   step.ts         step(state, inputs) -> new state, one 60Hz tick (KO + round reset live here)
   combat.ts       energy clashes (blast/beam meeting cancel, no damage), then hitboxes vs
                   hurtboxes for kicks, blasts and beams, then body push
+  cataclysm.ts    supers' strikes: eruptions / lightning (seeded random spots, warn/active/fade)
   state.ts        GameState / FighterState, createInitialState
   moves.ts        data-driven moves (phases, lunge, air-usable); add punch/blast here
   input.ts        InputFrame {left,right,jump,kick} + bit-packing for the network

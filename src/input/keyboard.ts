@@ -8,10 +8,10 @@ export interface InputSource {
 export type KeyBindings = Readonly<Record<keyof InputFrame, readonly string[]>>;
 
 /**
- * Two players sharing one keyboard: P1 on WASD with J K L to attack and I (above K) to block; P2 on
- * the arrows with , . / (the same shape as J K L one row down) and Right Shift (next to /) to
- * block, or the numpad. KeyboardEvent.code values, so bindings follow key position regardless of
- * layout.
+ * Two players sharing one keyboard: P1 on WASD with J K L to attack, I (above K) to block and O
+ * (above L) for the super; P2 on the arrows with , . / (the same shape as J K L one row down),
+ * Right Shift (next to /) to block and Enter for the super, or the numpad. KeyboardEvent.code
+ * values, so bindings follow key position regardless of layout.
  */
 export const PLAYER_BINDINGS: readonly KeyBindings[] = [
   {
@@ -23,6 +23,7 @@ export const PLAYER_BINDINGS: readonly KeyBindings[] = [
     blast: ['KeyJ'],
     beam: ['KeyL'],
     block: ['KeyI'],
+    super: ['KeyO'],
   },
   {
     left: ['ArrowLeft'],
@@ -33,6 +34,7 @@ export const PLAYER_BINDINGS: readonly KeyBindings[] = [
     blast: ['Comma', 'Numpad1'],
     beam: ['Slash', 'Numpad3'],
     block: ['ShiftRight', 'Numpad0'],
+    super: ['Enter', 'NumpadEnter'],
   },
 ];
 
@@ -63,6 +65,7 @@ export class KeyboardInput implements InputSource {
       blast: held('blast'),
       beam: held('beam'),
       block: held('block'),
+      super: held('super'),
     };
     this.tapped.clear();
     return frame;

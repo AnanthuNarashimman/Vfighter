@@ -1,12 +1,14 @@
 import {
   BEAM_HALF_THICKNESS,
   BLOCK_PUSHBACK,
+  CATACLYSMS,
   CROUCH_HURT_HEIGHT,
   FIGHTER_HEIGHT,
   GUARD_BREAK_STUN,
   SHIELD_OPEN_TICKS,
   SHIELD_REACH,
   SHOVE_SPEED,
+  STRIKE_GRACE_TICKS,
   HURT_HALF_WIDTH,
   HURT_HEIGHT,
   PROJECTILE_RADIUS,
@@ -14,8 +16,9 @@ import {
   STAGE_MARGIN,
   STAGE_WIDTH,
 } from './constants';
-import { MOVES, MUZZLE, phaseAt, sustainEndTick, type HitDef } from './moves';
-import { setAction, type Clash, type FighterState, type Mutable, type ProjectileState } from './state';
+import { strikeActive } from './cataclysm';
+import { MOVES, MUZZLE, STRIKE_HITS, phaseAt, sustainEndTick, type HitDef } from './moves';
+import { setAction, type Clash, type FighterState, type Mutable, type ProjectileState, type Strike } from './state';
 
 /** Where a clash happened; `step` stamps the id and tick. */
 export type ClashSpawn = Omit<Clash, 'id' | 'tick'>;
@@ -144,11 +147,36 @@ function strike(a: Mutable<FighterState>, v: Mutable<FighterState>): void {
 }
 
 /**
+ * Supers' strikes (lava columns, lightning bolts) hitting anyone but their owner standing in them
+ * (once per strike per fighter, and then not again by any strike for STRIKE_GRACE_TICKS). Returns
+ * the strikes with who they have struck updated.
+ */
+export function strikeHits(fighters: Mutable<FighterState>[], strikes: readonly Strike[]): Strike[] {
+  return strikes.map((s) => {
+    if (!strikeActive(s)) return s;
+    const def = CATACLYSMS[s.kind];
+    const column = { x0: s.x - def.halfWidth, x1: s.x + def.halfWidth, y0: 0, y1: def.height };
+    let struck = s.struck;
+    fighters.forEach((f, i) => {
+      const bit = 1 << i;
+      if (i === s.owner || struck & bit || f.action === 'ko' || f.strikeGrace > 0) return;
+      if (!overlaps(column, hurtbox(f))) return;
+      // Thrown away from the column's centre.
+      applyHit(f, STRIKE_HITS[s.kind], f.x >= s.x ? 1 : -1);
+      f.strikeGrace = STRIKE_GRACE_TICKS;
+      struck |= bit;
+    });
+    return struck === s.struck ? s : { ...s, struck };
+  });
+}
+
+/**
  * Damage, hitstun and knockback; a finishing blow launches the victim instead. A hit on a raised
- * shield costs guard instead of health, and one that empties the guard breaks it.
+ * shield costs guard instead of health, and one that empties the guard breaks it. Launching hits
+ * throw the victim into the air.
  */
 function applyHit(v: Mutable<FighterState>, hit: HitDef, dir: 1 | -1): void {
-  if (shielding(v, dir)) {
+  if (!hit.unblockable && shielding(v, dir)) {
     v.guard = Math.max(0, v.guard - hit.guardDamage);
     v.guardIdleTicks = 0;
     v.vx = dir * hit.knockback * BLOCK_PUSHBACK;
@@ -173,7 +201,12 @@ function applyHit(v: Mutable<FighterState>, hit: HitDef, dir: 1 | -1): void {
   if (v.action !== 'hit') setAction(v, 'hit');
   v.hitstun = Math.max(v.hitstun, hit.hitstun);
   v.vx = dir * hit.knockback;
-  if (!v.grounded) v.vy = Math.max(v.vy, 3); // a hit in the air pops the victim up slightly
+  if (hit.launch) {
+    v.grounded = false;
+    v.vy = Math.max(v.vy, hit.launch);
+  } else if (!v.grounded) {
+    v.vy = Math.max(v.vy, 3); // a hit in the air pops the victim up slightly
+  }
 }
 
 /**

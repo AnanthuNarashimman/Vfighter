@@ -1,6 +1,7 @@
 import { Container, Graphics, Text, type Ticker } from 'pixi.js';
-import { ENERGY_MAX, GUARD_MAX, GUARD_RAISE_MIN, HEALTH_MAX } from '../sim/constants';
+import { CATACLYSMS, ENERGY_MAX, GUARD_MAX, GUARD_RAISE_MIN, HEALTH_MAX } from '../sim/constants';
 import { MOVES } from '../sim/moves';
+import type { Element } from '../sim/moves';
 import type { FighterState, GameState } from '../sim/state';
 import { CHARACTERS, type CharacterDef, type HudPalette } from './characters';
 import type { ViewLayout } from './layout';
@@ -58,13 +59,20 @@ type ControlHint = readonly [keys: readonly string[], label: string];
 const CONTROLS: readonly (readonly ControlHint[])[] = [
   [
     [['A', 'D'], 'move'], [['W'], 'jump'], [['S'], 'duck'], [['K'], 'kick'], [['J'], 'blast'], [['L'], 'beam'],
-    [['I'], 'block'], [['C'], 'switch fighter'],
+    [['I'], 'block'], [['O'], 'super'], [['C'], 'switch fighter'],
   ],
   [
     [['←', '→'], 'move'], [['↑'], 'jump'], [['↓'], 'duck'], [['.'], 'kick'], [[','], 'blast'], [['/'], 'beam'],
-    [['R-Shift'], 'block'], [['M'], 'switch fighter'],
+    [['R-Shift'], 'block'], [['Enter'], 'super'], [['M'], 'switch fighter'],
   ],
 ];
+/** Each player's super key, for the SUPER READY tag. */
+const SUPER_KEYS = ['O', 'Enter'] as const;
+/** Each element's super: its name on the countdown and its colours. */
+const SUPER_LOOK: Readonly<Record<Element, { name: string; label: number; bar: number; trough: number }>> = {
+  fire: { name: 'INFERNO', label: 0xffb347, bar: 0xff6a1a, trough: 0x2a0a04 },
+  thunder: { name: 'TEMPEST', label: 0xa8d4ff, bar: 0x5cb4ff, trough: 0x0a1428 },
+};
 
 /**
  * Fighting-game style HUD: per player a big health bar across the top with an energy gauge under
@@ -128,7 +136,9 @@ export class Hud {
     this.panels.forEach((panel, i) => {
       const f = state.fighters[i];
       panel.root.visible = f !== undefined;
-      if (f) panel.update(f, ticker.deltaMS, this.time);
+      const own = state.cataclysms.find((c) => c.owner === i);
+      const superLeft = own ? 1 - own.tick / CATACLYSMS[own.kind].ticks : null;
+      if (f) panel.update(f, ticker.deltaMS, this.time, superLeft);
     });
 
     const { ko } = state;
@@ -212,6 +222,10 @@ class PlayerPanel {
   private shownHealth = HEALTH_MAX;
   private ghostHealth = HEALTH_MAX;
   private ghostHoldMs = 0;
+  private readonly superTag: Text;
+  private readonly superReadyText: string;
+  private readonly superBar = new Graphics();
+  private superElement: Element | null = null;
 
   constructor(player: number) {
     const side = player === 0 ? 1 : -1;
@@ -230,7 +244,17 @@ class PlayerPanel {
     this.name.anchor.set(side > 0 ? 0 : 1, 0);
     this.name.position.set(side * NAME_X, 8);
 
-    this.root.addChild(this.healthBar, this.gauge, this.guardBar, tag, this.name);
+    // Beside the energy gauge, toward the centre: SUPER READY, or the Inferno's countdown.
+    this.superReadyText = `SUPER READY · ${SUPER_KEYS[player]}`;
+    this.superTag = new Text({
+      text: this.superReadyText,
+      style: { ...TITLE_STYLE, fontSize: 11, stroke: { color: 0x000000, width: 3 } },
+    });
+    this.superTag.anchor.set(side > 0 ? 0 : 1, 0);
+    this.superTag.position.set(side * (BAR.x + BAR.width + 18), BAR.y - 5);
+    this.superBar.scale.x = side;
+
+    this.root.addChild(this.healthBar, this.gauge, this.guardBar, this.superBar, tag, this.name, this.superTag);
   }
 
   setCharacter(character: CharacterDef): void {
@@ -239,8 +263,10 @@ class PlayerPanel {
     this.tagBg.clear().poly([0, 0, 22, 0, 18, 14, -4, 14]).fill(character.hud.fill);
   }
 
-  update(f: FighterState, deltaMs: number, time: number): void {
+  /** `superLeft`: share of this player's super (cataclysm) still to run, or null if none is. */
+  update(f: FighterState, deltaMs: number, time: number, superLeft: number | null): void {
     const dt = deltaMs / 1000;
+    this.drawSuper(f, superLeft, time);
     // The fill tracks energy closely; a pale ghost lingers where it was so spending reads clearly.
     this.shownEnergy += (f.energy - this.shownEnergy) * Math.min(1, dt * 20);
     this.ghostEnergy = f.energy >= this.ghostEnergy ? f.energy : Math.max(f.energy, this.ghostEnergy - GHOST_SPEED * dt);
@@ -254,6 +280,34 @@ class PlayerPanel {
     else if (this.ghostHoldMs === 0) this.ghostHealth = Math.max(f.health, this.ghostHealth - HEALTH_GHOST_SPEED * dt);
     this.drawHealth(time);
     this.drawGuard(f.guard, f.action === 'block');
+  }
+
+  /** A pulsing SUPER READY when the super can be unleashed; its countdown (INFERNO, TEMPEST) while it runs. */
+  private drawSuper(f: FighterState, superLeft: number | null, time: number): void {
+    const look = SUPER_LOOK[f.element];
+    const g = this.superBar.clear();
+    // Restyling re-rasterizes the text, so only when the character changes.
+    if (this.superElement !== f.element) {
+      this.superElement = f.element;
+      this.superTag.style.fill = look.label;
+    }
+    if (superLeft !== null) {
+      this.superTag.visible = true;
+      this.superTag.text = look.name;
+      this.superTag.alpha = 0.85 + 0.15 * Math.sin(time * 0.02);
+      const x = BAR.x + BAR.width + 18;
+      const w = 96;
+      const y = BAR.y + 11;
+      g.rect(x - 1, y - 1, w + 2, 6).fill({ color: 0x000000, alpha: 0.6 });
+      g.rect(x, y, w, 4).fill(look.trough);
+      g.rect(x, y, w * superLeft, 4).fill(look.bar);
+      return;
+    }
+    const ready = f.energy >= ENERGY_MAX;
+    this.superTag.visible = ready;
+    if (!ready) return;
+    this.superTag.text = this.superReadyText;
+    this.superTag.alpha = 0.55 + 0.45 * Math.abs(Math.sin(time * 0.005));
   }
 
   /** Red while too low to raise the shield; brighter while the shield is up. */

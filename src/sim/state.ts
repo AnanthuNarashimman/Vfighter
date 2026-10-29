@@ -1,5 +1,5 @@
 import { NO_INPUT, type InputFrame } from './input';
-import type { MoveId } from './moves';
+import type { Element, MoveId } from './moves';
 import { COUNTER_CAP, ENERGY_MAX, GUARD_MAX, HEALTH_MAX, STAGE_WIDTH } from './constants';
 
 /**
@@ -9,6 +9,8 @@ import { COUNTER_CAP, ENERGY_MAX, GUARD_MAX, HEALTH_MAX, STAGE_WIDTH } from './c
 export type Action = 'idle' | 'walk' | 'air' | 'crouch' | 'block' | 'hit' | 'ko' | MoveId;
 
 export interface FighterState {
+  /** Decides the fighter's super (the character's look is the renderer's business). */
+  readonly element: Element;
   /** Horizontal centre, stage px. */
   readonly x: number;
   /** Feet height above the floor, px (0 = standing on the floor, positive = up). */
@@ -40,6 +42,8 @@ export interface FighterState {
   readonly guardBrokenTick: number;
   /** Skid velocity from being shoved (px per tick, on top of `vx`); decays to 0. */
   readonly shove: number;
+  /** Ticks left during which super strikes can't hit this fighter (after one just did). */
+  readonly strikeGrace: number;
   /** Remaining ticks of hitstun while `action` is 'hit'. */
   readonly hitstun: number;
   /** The current move already connected (a kick hits once). */
@@ -74,6 +78,29 @@ export interface Clash {
   readonly kind: 'blast' | 'beam';
 }
 
+/**
+ * A super in progress: the owner's element strikes the stage at random until `tick` reaches its
+ * CATACLYSMS duration (fire: Inferno's eruptions; thunder: Tempest's lightning).
+ */
+export interface Cataclysm {
+  readonly owner: number;
+  readonly kind: Element;
+  readonly tick: number;
+  /** Ticks until the next strike starts. */
+  readonly nextStrikeIn: number;
+}
+
+/** One strike of a cataclysm (an eruption, a lightning bolt). Phases by `age`: warn, active, fade. */
+export interface Strike {
+  readonly id: number;
+  readonly owner: number;
+  readonly kind: Element;
+  readonly x: number;
+  readonly age: number;
+  /** Bit per fighter already struck (each is hit once per strike). */
+  readonly struck: number;
+}
+
 export interface KnockOut {
   /** Index of the fighter left standing, or null for a double KO. */
   readonly winner: number | null;
@@ -90,6 +117,9 @@ export interface GameState {
   readonly nextProjectileId: number;
   /** Recent clashes (the last CLASH_KEEP_TICKS ticks), so a frame that runs several ticks sees them all. */
   readonly clashes: readonly Clash[];
+  /** At most one per fighter. */
+  readonly cataclysms: readonly Cataclysm[];
+  readonly strikes: readonly Strike[];
   /** Set once the round has been decided; the round restarts KO_RESET_TICKS later. */
   readonly ko: KnockOut | null;
 }
@@ -106,8 +136,9 @@ export function setAction(f: Mutable<FighterState>, action: Action): void {
   f.beamBlocked = false;
 }
 
-export function createFighter(x: number, facing: 1 | -1): FighterState {
+export function createFighter(x: number, facing: 1 | -1, element: Element = 'fire'): FighterState {
   return {
+    element,
     x,
     y: 0,
     vx: 0,
@@ -127,6 +158,7 @@ export function createFighter(x: number, facing: 1 | -1): FighterState {
     guardIdleTicks: COUNTER_CAP,
     guardBrokenTick: COUNTER_CAP,
     shove: 0,
+    strikeGrace: 0,
     hitstun: 0,
     moveHit: false,
     beamBlocked: false,
@@ -134,15 +166,24 @@ export function createFighter(x: number, facing: 1 | -1): FighterState {
   };
 }
 
-/** `nextProjectileId` carries over between rounds so the renderer never confuses old and new blasts. */
-export function createInitialState(seed = 1, nextProjectileId = 1): GameState {
+/**
+ * `nextProjectileId` (also used for strike ids) carries over between rounds so the renderer
+ * never confuses old and new effects; `elements` carry over so each player keeps their character.
+ */
+export function createInitialState(
+  seed = 1,
+  nextProjectileId = 1,
+  elements: readonly Element[] = ['fire', 'thunder'],
+): GameState {
   return {
     tick: 0,
     rngSeed: seed >>> 0,
-    fighters: [createFighter(STAGE_WIDTH * 0.3, 1), createFighter(STAGE_WIDTH * 0.7, -1)],
+    fighters: [createFighter(STAGE_WIDTH * 0.3, 1, elements[0]), createFighter(STAGE_WIDTH * 0.7, -1, elements[1])],
     projectiles: [],
     nextProjectileId,
     clashes: [],
+    cataclysms: [],
+    strikes: [],
     ko: null,
   };
 }

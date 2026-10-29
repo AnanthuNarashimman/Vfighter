@@ -1,5 +1,6 @@
 import type { InputSource } from '../input/keyboard';
 import { TICK_MS } from '../sim/constants';
+import type { Element } from '../sim/moves';
 import type { GameState } from '../sim/state';
 import { step } from '../sim/step';
 
@@ -22,6 +23,19 @@ export class LocalSession {
   ) {
     this.previous = initial;
     this.current = initial;
+  }
+
+  /**
+   * Change which element (and so which super) a fighter has, for switching characters while
+   * testing locally. Patches both kept states so interpolation stays consistent.
+   */
+  setElement(fighter: number, element: Element): void {
+    const patch = (s: GameState): GameState => ({
+      ...s,
+      fighters: s.fighters.map((f, i) => (i === fighter ? { ...f, element } : f)),
+    });
+    this.previous = patch(this.previous);
+    this.current = patch(this.current);
   }
 
   /** Feed elapsed real time; returns how far (0..1) we are between `previous` and `current`. */
