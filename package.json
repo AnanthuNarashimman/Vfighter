@@ -1,0 +1,23 @@
+{
+  "name": "valley-fighter",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "build-sprites": "node scripts/build-sprites.mjs",
+    "predev": "node scripts/build-sprites.mjs --if-stale",
+    "dev": "vite",
+    "prebuild": "node scripts/build-sprites.mjs --if-stale",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "pixi.js": "^8.6.6"
+  },
+  "devDependencies": {
+    "pngjs": "^7.0.0",
+    "typescript": "^5.7.3",
+    "vite": "^6.0.7"
+  }
+}
