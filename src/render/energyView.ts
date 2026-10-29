@@ -64,6 +64,9 @@ export class EnergyView {
   private readonly lastHealth: number[] = [];
   /** guardBrokenTick seen last frame per fighter, to spot guard breaks. */
   private readonly lastBroken: number[] = [];
+  /** Per fighter: on the ground last frame, and vertical speed while last airborne (for landings). */
+  private readonly lastGrounded: boolean[] = [];
+  private readonly lastVy: number[] = [];
   private time = 0;
 
   constructor() {
@@ -108,6 +111,17 @@ export class EnergyView {
         this.ground.addChild(fx.ground);
       }
       this.lastBroken[i] = f.guardBrokenTick;
+
+      // Takeoff: the push-off blasts dust out behind the jump. Landing: a ring of dust, heavier the
+      // faster the fall (a knocked-out body hits hardest).
+      const wasGrounded = this.lastGrounded[i] ?? f.grounded;
+      if (wasGrounded && !f.grounded && f.vy > 0) groundBurst(this.particles, f.x, 0.9, -Math.sign(f.vx) * 0.6);
+      if (!wasGrounded && f.grounded) {
+        const fall = Math.abs(this.lastVy[i] ?? 0);
+        groundBurst(this.particles, f.x, Math.min(1.8, fall / 12) + (f.action === 'ko' ? 0.6 : 0));
+      }
+      this.lastGrounded[i] = f.grounded;
+      if (!f.grounded) this.lastVy[i] = f.vy;
 
       skidDust(this.particles, f, dt);
     });
@@ -1113,36 +1127,63 @@ class ClashFx {
   }
 }
 
-/** Dirt kicked up under a fighter sliding across the ground (shoved, knocked back, or braced behind a shield). */
-const DUST = { color: 0x9a8466, dark: 0x5e4d3a, minSpeed: 1.2 } as const;
+/** The valley floor's dust in a few earth tones: lighter, fine dust hangs; darker, heavier dust settles. */
+const DUST_TONES = [0xb09a78, 0x9a8466, 0x7d6a50, 0x5e4d3a] as const;
+/** Slides slower than this (px per tick) don't raise dust. */
+const SKID_MIN_SPEED = 1.2;
 
+/** One billow of dust at floor level. `vx`/`vy` in px/s. */
+function dustPuff(particles: Particles, x: number, vx: number, vy: number, size: number): void {
+  const tone = Math.floor(Math.random() * DUST_TONES.length);
+  particles.emit({
+    x,
+    y: FLOOR_Y - 2 - Math.random() * 8,
+    vx,
+    vy,
+    life: 0.6 + Math.random() * 0.7,
+    size,
+    // Darker dust is heavier: it settles; the pale fines hang in the air longer.
+    tint: DUST_TONES[tone],
+    tintEnd: DUST_TONES[Math.max(0, tone - 1)],
+    grow: 3.2,
+    alpha: 0.62 - tone * 0.05,
+    drag: 2.6,
+    gravity: 18 + tone * 22,
+    round: true,
+    blend: 'normal',
+  });
+}
+
+/**
+ * Feet hitting or leaving the ground hard: a low ring of dust rolling out both ways. `strength`
+ * ~1 for a jump, more for a heavy landing.
+ */
+function groundBurst(particles: Particles, x: number, strength: number, lean = 0): void {
+  let n = Math.round(12 + 14 * strength);
+  while (n-- > 0) {
+    const side = Math.random() < 0.5 ? -1 : 1;
+    const speed = (90 + Math.random() * 260) * strength;
+    dustPuff(particles, x + side * Math.random() * 26, side * speed + lean * 120, -(10 + Math.random() * 70), 22 + Math.random() * 22);
+  }
+}
+
+/**
+ * Dust ploughed up by a fighter sliding across the ground (shoved, knocked back, or braced behind
+ * a shield): the heels dig in and push a wave of dust ahead of them along the slide.
+ */
 function skidDust(particles: Particles, f: FighterState, dt: number): void {
   if (!f.grounded) return;
   const slide = f.vx + f.shove;
   // Walking moves at a steady vx too; only count slides (shoves, knockback, blocked-hit pushback).
   const sliding = f.shove !== 0 || f.action === 'hit' || f.action === 'block' || f.action === 'ko';
   const speed = Math.abs(slide);
-  if (!sliding || speed < DUST.minSpeed) return;
+  if (!sliding || speed < SKID_MIN_SPEED) return;
   const dir = Math.sign(slide);
-  let n = spawnCount(speed * 12 * dt);
+  // The leading heel (on the side the body slides toward) ploughs.
+  const heel = f.x + dir * (20 + Math.random() * 25);
+  let n = spawnCount(speed * 26 * dt);
   while (n-- > 0) {
-    // From the heels, which drag; the dirt sprays up and back against the slide.
-    const heel = f.x - dir * (10 + Math.random() * 30);
-    particles.emit({
-      x: heel,
-      y: FLOOR_Y - 2 - Math.random() * 6,
-      vx: -dir * (20 + Math.random() * 60) + slide * 20,
-      vy: -(25 + Math.random() * 70),
-      life: 0.4 + Math.random() * 0.45,
-      size: 14 + Math.random() * 16,
-      tint: Math.random() < 0.6 ? DUST.color : DUST.dark,
-      grow: 2.6,
-      alpha: 0.42,
-      drag: 3,
-      gravity: 40,
-      round: true,
-      blend: 'normal',
-    });
+    dustPuff(particles, heel, dir * (60 + Math.random() * 90) + slide * 30, -(30 + Math.random() * 110), 18 + Math.random() * 20);
   }
 }
 

@@ -28,6 +28,18 @@ const DEFENSE_SHEET = {
   match: ['block', 'punch_windup'],
 };
 
+/**
+ * Skid: braced and leaning back, being shoved. No main-sheet pose stands the same height, so it is
+ * matched by silhouette area (scale = sqrt of the area ratio) against the punch wind-up instead.
+ */
+const SKID_SHEET = {
+  sheet: 'images/Dynamic Warrior Recoil Duo.png',
+  rows: 1,
+  cols: 2,
+  match: ['skid', 'punch_windup'],
+  matchBy: 'area',
+};
+
 const CONFIG = {
   fighters: [
     {
@@ -45,7 +57,10 @@ const CONFIG = {
       standingFrame: 'idle_stance',
       // Optional manual nudges (source px) if the auto anchor of a frame looks off: { walk_1: { dx: -4 } }
       anchorNudge: {},
-      extras: [{ ...DEFENSE_SHEET, cells: { block: 0, duck: 1 } }],
+      extras: [
+        { ...DEFENSE_SHEET, cells: { block: 0, duck: 1 } },
+        { ...SKID_SHEET, cells: { skid: 0 } },
+      ],
     },
     {
       id: 'navy',
@@ -60,7 +75,10 @@ const CONFIG = {
       ],
       standingFrame: 'idle_stance',
       anchorNudge: {},
-      extras: [{ ...DEFENSE_SHEET, cells: { block: 2, duck: 3 } }],
+      extras: [
+        { ...DEFENSE_SHEET, cells: { block: 2, duck: 3 } },
+        { ...SKID_SHEET, cells: { skid: 1 } },
+      ],
     },
   ],
   stages: [{ id: 'valley', image: 'images/Serene Fantasy Valley Panorama.png' }],
@@ -110,7 +128,12 @@ function buildFighter(cfg) {
     const sheet = keyedSheet(extra.sheet);
     const cells = findFigures(sheet, extra.rows, extra.cols);
     const [cellFrame, mainFrame] = extra.match;
-    const scale = height(mainBoxes[cfg.frames.indexOf(mainFrame)]) / height(cells[extra.cells[cellFrame]]);
+    const ref = mainBoxes[cfg.frames.indexOf(mainFrame)];
+    const cellBox = cells[extra.cells[cellFrame]];
+    const scale =
+      extra.matchBy === 'area'
+        ? Math.sqrt(area(main.px, main.W, ref) / area(sheet.px, sheet.W, cellBox))
+        : height(ref) / height(cellBox);
     for (const [name, cell] of Object.entries(extra.cells)) {
       names.push(name);
       boxes.push(scaleFigure(sheet.px, sheet.W, cells[cell], scale));
@@ -239,6 +262,13 @@ function findFigures({ px, W, H }, rows, cols) {
 
 function height(b) {
   return b.y1 - b.y0 + 1;
+}
+
+/** Solid (alpha >= 128) pixels of a figure: its silhouette area. */
+function area(px, W, b) {
+  let n = 0;
+  for (let y = b.y0; y <= b.y1; y++) for (let x = b.x0; x <= b.x1; x++) if (px[(y * W + x) * 4 + 3] >= 128) n++;
+  return n;
 }
 
 /**

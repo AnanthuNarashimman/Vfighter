@@ -67,7 +67,7 @@ export const BLOCK_PUSHBACK = 0.6;
 export const SHIELD_OPEN_TICKS = 6;
 /** Skid speed (px per tick) of a fighter shoved away by an opening shield; it eases off by SHOVE_FRICTION per tick. */
 export const SHOVE_SPEED = 9;
-export const SHOVE_FRICTION = 0.8;
+export const SHOVE_FRICTION = 0.86;
 /** Fighters cannot get closer than twice this (centre to centre) unless one clears the other's head. */
 export const PUSH_HALF_WIDTH = 54;
 export const PROJECTILE_RADIUS = 24;

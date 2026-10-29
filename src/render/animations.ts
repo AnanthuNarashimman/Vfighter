@@ -17,7 +17,11 @@ export type FrameName =
   | 'jump_air'
   | 'hit_recoil'
   | 'block'
-  | 'duck';
+  | 'duck'
+  | 'skid';
+
+/** Braced and sliding back while shoved (by an opening shield) faster than this, px per tick. */
+const SKID_MIN_SHOVE = 0.6;
 
 const IDLE_FRAME_TICKS = 36;
 /** Within each step, ticks [CONTACT_HALF, STEP - CONTACT_HALF) show the passing pose. */
@@ -32,6 +36,9 @@ const MOVE_FRAMES: Record<MoveId, Record<MovePhase, FrameName>> = {
 
 /** Pure view of the simulation: which sprite frame represents this fighter right now. */
 export function frameFor(f: FighterState): FrameName {
+  // Being shoved overrides standing, walking and ducking (not attacks, hitstun or blocking).
+  const free = f.action === 'idle' || f.action === 'walk' || f.action === 'crouch';
+  if (free && f.grounded && Math.abs(f.shove) > SKID_MIN_SHOVE) return 'skid';
   if (isMoveId(f.action)) {
     const phase = phaseAt(MOVES[f.action], f.actionTick, f.moveSustained);
     return MOVE_FRAMES[f.action][phase?.phase ?? 'recovery'];
