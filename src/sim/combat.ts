@@ -11,13 +11,15 @@ import {
   STRIKE_GRACE_TICKS,
   HURT_HALF_WIDTH,
   HURT_HEIGHT,
+  METER_GAIN,
+  METER_MAX,
   PROJECTILE_RADIUS,
   PUSH_HALF_WIDTH,
   STAGE_MARGIN,
   STAGE_WIDTH,
 } from './constants';
 import { strikeActive } from './cataclysm';
-import { MOVES, MUZZLE, STRIKE_HITS, phaseAt, sustainEndTick, type HitDef } from './moves';
+import { MOVES, MUZZLE, STRIKE_HITS, isMoveId, phaseAt, sustainEndTick, type HitDef } from './moves';
 import { setAction, type Clash, type FighterState, type Mutable, type ProjectileState, type Strike } from './state';
 
 /** Where a clash happened; `step` stamps the id and tick. */
@@ -99,7 +101,7 @@ export function resolveCombat(
     if (gone.has(p.id)) continue;
     const victim = fighters.find((f, j) => j !== p.owner && f.action !== 'ko' && overlaps(hurtbox(f), around(p)));
     if (!victim) continue;
-    applyHit(victim, blast, p.vx > 0 ? 1 : -1);
+    credit(fighters[p.owner], applyHit(victim, blast, p.vx > 0 ? 1 : -1));
     gone.add(p.id);
   }
 
@@ -125,7 +127,7 @@ function strike(a: Mutable<FighterState>, v: Mutable<FighterState>): void {
       y1: a.y + b.y1 * FIGHTER_HEIGHT,
     };
     if (overlaps(box, hurtbox(v))) {
-      applyHit(v, hit, a.facing);
+      credit(a, applyHit(v, hit, a.facing));
       a.moveHit = true;
     }
   }
@@ -141,7 +143,7 @@ function strike(a: Mutable<FighterState>, v: Mutable<FighterState>): void {
     if (ahead > -HURT_HALF_WIDTH && muzzleY >= box.y0 && muzzleY <= box.y1 && contact <= a.beamLength) {
       a.beamLength = contact;
       a.beamBlocked = true;
-      applyHit(v, hit, a.facing);
+      credit(a, applyHit(v, hit, a.facing));
     }
   }
 }
@@ -170,33 +172,62 @@ export function strikeHits(fighters: Mutable<FighterState>[], strikes: readonly 
   });
 }
 
+/** What a hit took off its victim, for the attacker's super meter. */
+interface Dealt {
+  readonly health: number;
+  readonly guard: number;
+}
+const NOTHING: Dealt = { health: 0, guard: 0 };
+
+/**
+ * A fighter unleashing their super can't be hurt: from the moment it lands (its active phase; the
+ * wind-up before it can still be interrupted) through the whole stance while it runs.
+ */
+function untouchable(f: FighterState): boolean {
+  if (f.action === 'channel') return true;
+  if (!isMoveId(f.action) || !MOVES[f.action].cataclysm) return false;
+  return phaseAt(MOVES[f.action], f.actionTick, f.moveSustained)?.phase !== 'startup';
+}
+
+/** Fill the attacker's super meter for what their hit did (not while their own super runs). */
+function credit(a: Mutable<FighterState> | undefined, dealt: Dealt): void {
+  if (!a || a.action === 'channel') return;
+  a.meter = Math.min(METER_MAX, a.meter + dealt.health * METER_GAIN.dealt + dealt.guard * METER_GAIN.blocked);
+}
+
 /**
  * Damage, hitstun and knockback; a finishing blow launches the victim instead. A hit on a raised
  * shield costs guard instead of health, and one that empties the guard breaks it. Launching hits
- * throw the victim into the air.
+ * throw the victim into the air. A fighter in their super shrugs everything off. The victim's own
+ * meter fills a little from what they lose; returns what was taken, for the attacker's.
  */
-function applyHit(v: Mutable<FighterState>, hit: HitDef, dir: 1 | -1): void {
+function applyHit(v: Mutable<FighterState>, hit: HitDef, dir: 1 | -1): Dealt {
+  if (untouchable(v)) return NOTHING;
   if (!hit.unblockable && shielding(v, dir)) {
-    v.guard = Math.max(0, v.guard - hit.guardDamage);
+    const guard = Math.min(v.guard, hit.guardDamage);
+    v.guard -= guard;
     v.guardIdleTicks = 0;
+    v.meter = Math.min(METER_MAX, v.meter + guard * METER_GAIN.guarded);
     v.vx = dir * hit.knockback * BLOCK_PUSHBACK;
-    if (v.guard > 0) return;
+    if (v.guard > 0) return { health: 0, guard };
     // Guard break: the shield shatters and the fighter reels, wide open.
     setAction(v, 'hit');
     v.hitstun = GUARD_BREAK_STUN;
     v.guardBrokenTick = 0;
     v.vx = dir * hit.knockback;
-    return;
+    return { health: 0, guard };
   }
 
-  v.health = Math.max(0, v.health - hit.damage);
+  const health = Math.min(v.health, hit.damage);
+  v.health -= health;
+  v.meter = Math.min(METER_MAX, v.meter + health * METER_GAIN.taken);
   if (v.health === 0) {
     setAction(v, 'ko');
     v.hitstun = 0;
     v.grounded = false;
     v.vx = dir * 6;
     v.vy = 9;
-    return;
+    return { health, guard: 0 };
   }
   if (v.action !== 'hit') setAction(v, 'hit');
   v.hitstun = Math.max(v.hitstun, hit.hitstun);
@@ -208,6 +239,7 @@ function applyHit(v: Mutable<FighterState>, hit: HitDef, dir: 1 | -1): void {
   } else if (!v.grounded) {
     v.vy = Math.max(v.vy, 3); // a hit in the air pops the victim up slightly
   }
+  return { health, guard: 0 };
 }
 
 /**
@@ -225,7 +257,10 @@ function pushApart(a: Mutable<FighterState>, b: Mutable<FighterState>): void {
   const overlap = min - (right.x - left.x);
   if (overlap <= 0) return;
 
-  const leftShare = leftWall === rightWall ? 0.5 : leftWall ? 0 : 1;
+  // A shield, or a super's stance, holds its ground: only the other fighter gives way.
+  const leftHolds = leftWall || left.action === 'channel';
+  const rightHolds = rightWall || right.action === 'channel';
+  const leftShare = leftHolds === rightHolds ? 0.5 : leftHolds ? 0 : 1;
   const lo = STAGE_MARGIN;
   const hi = STAGE_WIDTH - STAGE_MARGIN;
   left.x = Math.max(lo, left.x - overlap * leftShare);

@@ -30,8 +30,20 @@ export const ENERGY_MAX = 100;
 export const ENERGY_REGEN = 0.25;
 export const ENERGY_REGEN_DELAY = 40;
 
-/** A deep pool so rounds last: roughly 15 clean kicks, or 12 blasts. */
+/** A deep pool so rounds last: roughly 24 clean kicks, or 19 blasts. */
 export const HEALTH_MAX = 1000;
+
+/**
+ * The super meter: a separate gauge that fills from how the fight goes (nothing passive), and a
+ * super needs all of it. Per point of health: dealt by the fighter's kicks, blasts and beams
+ * (`dealt`), lost to hits (`taken`: a little comeback). Per point of guard: knocked off the
+ * opponent's shield (`blocked`), lost on your own (`guarded`). A super's own strikes never fill
+ * the caster's meter, and nothing fills it while a super is running.
+ */
+export const METER_MAX = 100;
+export const METER_GAIN = { dealt: 0.25, taken: 0.1, blocked: 0.2, guarded: 0.12 } as const;
+/** With nobody to fight (solo testing), the meter refills on its own at this rate per tick. */
+export const METER_SOLO_REGEN = 0.6;
 
 /** Hurtbox: the body that can be hit, centred on x, from the feet up. */
 export const HURT_HALF_WIDTH = 38;
@@ -102,6 +114,8 @@ export interface CataclysmDef {
   readonly grace?: number;
   /** Ticks from the super landing to its first strike (default 8), e.g. to let an entrance play out. */
   readonly firstStrike?: number;
+  /** Never aim at a target still stuck in a trap (see TRAP): they get the chance to move away. */
+  readonly spareTrapped?: boolean;
 }
 
 /**
@@ -111,25 +125,27 @@ export interface CataclysmDef {
 export const STRIKE_GRACE_TICKS = 70;
 
 export const CATACLYSMS: Readonly<Record<Element, CataclysmDef>> = {
-  // Inferno: the ground cracks, glows, and erupts in a roaring lava column.
+  // Inferno: the ground cracks, glows, and erupts in a roaring lava column. The crack gives only a
+  // short warning (~0.4s), and most eruptions open near the opponent.
   fire: {
     ticks: 540,
     interval: { min: 20, max: 44 },
-    aim: 0.42,
-    aimSpread: 120,
-    warnTicks: 42,
+    aim: 0.55,
+    aimSpread: 90,
+    warnTicks: 24,
     activeTicks: 26,
     fadeTicks: 50,
     halfWidth: 46,
     height: 380,
   },
   // Tempest: static gathers on a spot, then lightning slams down from the clouds. Quicker and more
-  // frequent than eruptions, and over in an instant, so it is thinner and hits a little less hard.
+  // frequent than eruptions, and over in an instant, so it is thinner; the storm hunts its target,
+  // most bolts striking close to them.
   thunder: {
     ticks: 540,
     interval: { min: 14, max: 32 },
-    aim: 0.5,
-    aimSpread: 110,
+    aim: 0.72,
+    aimSpread: 70,
     warnTicks: 32,
     activeTicks: 8,
     fadeTicks: 30,
@@ -138,20 +154,23 @@ export const CATACLYSMS: Readonly<Record<Element, CataclysmDef>> = {
   },
   // Goon Fall, the strongest super: a colossus of goo rises out of the valley (a ~2s entrance before
   // anything falls), then goo balls rain down. Each falls in sight for a moment (its shadow marks the
-  // spot), then splats: lighter hits than an eruption, but far more often, mostly aimed at the
-  // opponent, with a short grace, and each one traps (see TRAP) so the next is hard to escape.
+  // spot), then splats, mostly aimed at the opponent, and traps whoever it hits (see TRAP). A trapped
+  // fighter is not aimed at, and nothing can hit them again until the goo lets go: no pinning, they
+  // always get the chance to move away before the next aimed ball.
   goo: {
     ticks: 660,
     firstStrike: 128,
-    interval: { min: 11, max: 24 },
-    aim: 0.62,
-    aimSpread: 90,
+    interval: { min: 14, max: 28 },
+    aim: 0.7,
+    aimSpread: 110,
+    spareTrapped: true,
     warnTicks: 22,
     activeTicks: 4,
     fadeTicks: 70,
     halfWidth: 50,
     height: 320,
-    grace: 20,
+    // As long as the whole trap: nothing hits a fighter again until the goo has let go of them.
+    grace: 66,
   },
 };
 
@@ -159,7 +178,7 @@ export const CATACLYSMS: Readonly<Record<Element, CataclysmDef>> = {
  * Goo stuck to a fighter (from a Goon Fall strike) for `ticks`: for the first `stuckTicks` they
  * can't walk or jump at all (they can still block and attack), then they move at `slow` speed.
  */
-export const TRAP = { ticks: 100, stuckTicks: 45, slow: 0.4 } as const;
+export const TRAP = { ticks: 66, stuckTicks: 24, slow: 0.5 } as const;
 
 /** Projectiles are removed once this far outside the stage. */
 export const PROJECTILE_DESPAWN_MARGIN = 400;

@@ -100,9 +100,9 @@ async function main(): Promise<void> {
     return view;
   });
 
-  // C cycles P1's character and M cycles P2's, any time (also mid-fight); the URL follows, so a
-  // reload keeps the picks. The simulation's side of a character (element, kit) is patched in, so
-  // switching mid-fight is safe.
+  // Before the fight, C cycles P1's character and M cycles P2's; once anyone presses a fight key the
+  // picks are locked until the next round. The URL follows, so a reload keeps the picks. The
+  // simulation's side of a character (element, kit) is patched into the running state.
   const applyCharacter = (player: number): void => {
     const character = CHARACTERS[picks[player]];
     views[player].setSheet(sheets[picks[player]] as Spritesheet);
@@ -115,7 +115,7 @@ async function main(): Promise<void> {
   const switchKeys = ['KeyC', 'KeyM'];
   window.addEventListener('keydown', (e) => {
     const player = switchKeys.indexOf(e.code);
-    if (player < 0 || player >= views.length || e.repeat) return;
+    if (player < 0 || player >= views.length || e.repeat || session.current.started) return;
     picks[player] = (picks[player] + 1) % CHARACTERS.length;
     applyCharacter(player);
     const url = new URL(location.href);

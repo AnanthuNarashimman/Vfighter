@@ -18,7 +18,16 @@ export type FrameName =
   | 'hit_recoil'
   | 'block'
   | 'duck'
-  | 'skid';
+  | 'skid'
+  /** Gooner only: gathering and pouring his goo stream. */
+  | 'beam_charge'
+  | 'beam_release';
+
+/** Frames only some characters have, and what the others show instead. */
+export const FRAME_FALLBACK: Partial<Record<FrameName, FrameName>> = {
+  beam_charge: 'blast_charge',
+  beam_release: 'blast_release',
+};
 
 /** Braced and sliding back while shoved (by an opening shield) faster than this, px per tick. */
 const SKID_MIN_SHOVE = 0.6;
@@ -31,7 +40,7 @@ const MOVE_FRAMES: Record<MoveId, Record<MovePhase, FrameName>> = {
   kick: { startup: 'kick_windup', active: 'kick_high', recovery: 'kick_windup' },
   // The arm stays out through the recovery as a follow-through, then snaps back to stance.
   blast: { startup: 'blast_charge', active: 'blast_release', recovery: 'blast_release' },
-  beam: { startup: 'blast_charge', active: 'blast_release', recovery: 'blast_release' },
+  beam: { startup: 'beam_charge', active: 'beam_release', recovery: 'beam_release' },
   // Gathering the heat in the hands, then thrusting it out into the earth.
   super: { startup: 'blast_charge', active: 'punch_extend', recovery: 'punch_windup' },
   // Drawing the charge in, then flinging an open palm out to call the storm.
@@ -55,6 +64,9 @@ export function frameFor(f: FighterState): FrameName {
       return 'hit_recoil';
     case 'block':
       return 'block';
+    case 'channel':
+      // Holding the super: head back, arms flung out (Gooner's own pose; others use their blast release).
+      return 'beam_release';
     case 'crouch':
       return 'duck';
     case 'air':

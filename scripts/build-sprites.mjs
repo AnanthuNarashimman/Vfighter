@@ -60,6 +60,7 @@ const GOONER_POSES = {
 const SPILL_TOLERANCE_AWAY = {
   'images/Heavyset Fighter Sprite Sheet.png': 140,
   'images/Magenta Fighter Pose Sheet.png': 140,
+  'images/Muscular Warrior Pose Sheet.png': 140,
 };
 
 const CONFIG = {
@@ -115,7 +116,18 @@ const CONFIG = {
       ],
       standingFrame: 'idle_stance',
       anchorNudge: {},
-      extras: [{ ...GOONER_POSES, cells: { block: 0, duck: 1, skid: 2 } }],
+      extras: [
+        { ...GOONER_POSES, cells: { block: 0, duck: 1, skid: 2 } },
+        // His goo stream: gathering it (hands together), then letting it pour (arched back, arms out).
+        // Both stand in the same wide stance as the punch wind-up.
+        {
+          sheet: 'images/Muscular Warrior Pose Sheet.png',
+          rows: 1,
+          cols: 2,
+          match: ['beam_charge', 'punch_windup'],
+          cells: { beam_charge: 0, beam_release: 1 },
+        },
+      ],
     },
   ],
   stages: [{ id: 'valley', image: 'images/Serene Fantasy Valley Panorama.png' }],
@@ -141,7 +153,7 @@ const CONFIG = {
   outDir: 'public/assets',
   framePad: 4, // transparent margin around the figures inside the shared frame canvas
   atlasGap: 2, // gap between frames in the atlas (prevents bleeding under linear filtering)
-  maxAtlas: 2048,
+  maxAtlas: 4096, // the smallest max texture size WebGL devices realistically have
   edgeRadius: 2, // width (px) of the band next to the background where partial alpha is allowed
   minSpeck: 40, // foreground islands smaller than this (px) are discarded as noise
 };
