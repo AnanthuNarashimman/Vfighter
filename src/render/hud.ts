@@ -56,7 +56,7 @@ const CONTROLS_ROW = 32;
 /** `move`: listed only for fighters whose kit has it. */
 type ControlHint = readonly [keys: readonly string[], label: string, move?: MoveId];
 
-/** Per player, matching input/keyboard.ts PLAYER_BINDINGS. The last entry is the dev-only character switch (see main.ts). */
+/** Per player, matching input/keyboard.ts PLAYER_BINDINGS. The last entry is the character switch (see main.ts). */
 const CONTROLS: readonly (readonly ControlHint[])[] = [
   [
     [['A', 'D'], 'move'], [['W'], 'jump'], [['S'], 'duck'], [['K'], 'kick'], [['J'], 'blast', 'blast'],
@@ -187,8 +187,7 @@ export class Hud {
       tag.position.set(14, 2);
       row.addChild(tag);
       let cx = 14 + tag.width + 12;
-      // Character switching is a local testing aid, so it is only listed in dev builds.
-      for (const [keys, label, move] of import.meta.env.DEV ? hints : hints.slice(0, -1)) {
+      for (const [keys, label, move] of hints) {
         if (move && !kitHasMove(this.kits[player], move)) continue;
         for (const k of keys) {
           cx += keyCap(row, k, cx) + 3;

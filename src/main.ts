@@ -100,8 +100,9 @@ async function main(): Promise<void> {
     return view;
   });
 
-  // In dev, C cycles P1 and M cycles P2; the URL follows, so a reload keeps the picks. The
-  // simulation's side of a character (element, kit) is patched in, so switching mid-fight is safe.
+  // C cycles P1's character and M cycles P2's, any time (also mid-fight); the URL follows, so a
+  // reload keeps the picks. The simulation's side of a character (element, kit) is patched in, so
+  // switching mid-fight is safe.
   const applyCharacter = (player: number): void => {
     const character = CHARACTERS[picks[player]];
     views[player].setSheet(sheets[picks[player]] as Spritesheet);
@@ -111,18 +112,16 @@ async function main(): Promise<void> {
     session.setLoadout(player, loadoutOf(character));
   };
   views.forEach((_, i) => applyCharacter(i));
-  if (import.meta.env.DEV) {
-    const switchKeys = ['KeyC', 'KeyM'];
-    window.addEventListener('keydown', (e) => {
-      const player = switchKeys.indexOf(e.code);
-      if (player < 0 || player >= views.length || e.repeat) return;
-      picks[player] = (picks[player] + 1) % CHARACTERS.length;
-      applyCharacter(player);
-      const url = new URL(location.href);
-      url.searchParams.set(pickParams[player], CHARACTERS[picks[player]].id);
-      history.replaceState(null, '', url);
-    });
-  }
+  const switchKeys = ['KeyC', 'KeyM'];
+  window.addEventListener('keydown', (e) => {
+    const player = switchKeys.indexOf(e.code);
+    if (player < 0 || player >= views.length || e.repeat) return;
+    picks[player] = (picks[player] + 1) % CHARACTERS.length;
+    applyCharacter(player);
+    const url = new URL(location.href);
+    url.searchParams.set(pickParams[player], CHARACTERS[picks[player]].id);
+    history.replaceState(null, '', url);
+  });
 
   app.ticker.add((ticker) => {
     const alpha = session.advance(ticker.deltaMS);
