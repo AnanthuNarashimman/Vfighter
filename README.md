@@ -9,7 +9,7 @@ npm run dev        # http://localhost:5173
 
 Two players on one keyboard:
 
-| | move | jump | duck (hold) | kick | blast | beam (hold) | block (hold) | super | switch fighter (dev only) |
+| | move | jump | duck (hold) | kick | blast | beam (hold) | block (hold) | super | switch fighter |
 |---|---|---|---|---|---|---|---|---|---|
 | P1 | A / D | W, Space | S | K | J | L | I | O | C |
 | P2 | ← / → | ↑ | ↓ | `.` (Num2) | `,` (Num1) | `/` (Num3) | Right Shift (Num0) | Enter | M |
@@ -37,7 +37,9 @@ Ducking slips under blasts and beams but kicks still land. Blocking raises a shi
 everything but drains the guard meter (blocked hits, and slowly just holding it); an empty guard
 breaks and leaves you stunned, and the shield can't go back up until the guard refills past the notch.
 
-Pick characters by URL: `?p1=maroon&p2=navy` (also `gooner`). H toggles the controls strip.
+Switch characters any time, even mid-fight: C cycles P1 (FLASH, VOLT, GOONER), M cycles P2. The
+picks are kept in the URL (`?p1=maroon&p2=navy`, also `gooner`), so a reload keeps them. H toggles
+the controls strip.
 
 **GOONER** fights with fluid instead of energy (`render/gooView.ts`): his blast is a jiggling ball of
 sticky white goo, and his beam a powerful straight jet that
