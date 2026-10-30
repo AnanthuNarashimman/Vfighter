@@ -24,12 +24,27 @@ caster is never hurt by their own.
 - **Tempest** (VOLT, thunder): the sky goes dark with storm clouds and rain. Each strike gathers as
   static on the ground for ~0.5s, then lightning slams down, electrocuting anyone there (a little
   less damage, a longer stun). Strikes come more often than eruptions.
+- **Goon Fall** (GOONER, goo), the strongest super: a ~2s entrance first (night falls, a colossus of
+  goo in Gooner's image heaves up out of the valley facing you, arms spread and palms open, its eyes
+  ignite red, it roars), then goo balls rain down for ~9s
+  while it looms over everything. Each is targeted for ~0.37s (a pillar of light, a closing reticle,
+  its shadow) while it plunges ever faster, then hits like a bomb. Hits are lighter than an eruption
+  but far more frequent (short grace) and trap: glued in place for ~0.75s, then slowed for ~0.9s
+  (`TRAP` in `sim/constants.ts`), so the next ball is hard to escape. When it ends the colossus
+  melts back into the valley. Nothing covers the play area, and the name is never shown.
 
 Ducking slips under blasts and beams but kicks still land. Blocking raises a shield that stops
 everything but drains the guard meter (blocked hits, and slowly just holding it); an empty guard
 breaks and leaves you stunned, and the shield can't go back up until the guard refills past the notch.
 
-Pick characters by URL: `?p1=maroon&p2=navy`. H toggles the controls strip.
+Pick characters by URL: `?p1=maroon&p2=navy` (also `gooner`). H toggles the controls strip.
+
+**GOONER** fights with fluid instead of energy (`render/gooView.ts`): his blast is a jiggling ball of
+sticky white goo, and his beam a powerful straight jet that
+sprays where it hits; goo lands as puddles and hit fighters drip for a while. His shield is a holy
+holographic cross (white-gold, scanlines, halo and rays, the odd glitch). His super is Goon Fall
+(`render/colossusView.ts`). The **Test GOONER solo** button at the top (or `?solo=gooner`) puts him
+alone on the stage on P1's keys; **Back to versus** returns to the match.
 
 ## Asset pipeline
 
@@ -42,7 +57,15 @@ reads `images/` (never modified) and writes `public/assets/`:
   Frame names: `idle_stance idle_breathe walk_1 walk_2 punch_windup punch_extend kick_windup
   kick_high blast_charge blast_release jump_air hit_recoil`, plus `block` and `duck` taken from
   the shared defense-poses sheet and rescaled to match (block is matched to `punch_windup`).
+- `fighters/navy.*` likewise; `fighters/gooner.*` from the heavyset sheet, with block, duck and skid
+  from his own pose sheet (rows of 2 and 1 figures). His purple sash is close to the magenta key, so
+  his sheets keep more of that hue on bluish pixels (`SPILL_TOLERANCE_AWAY` in the script).
 - `stages/valley.png`: the background.
+- `supers/colossus.png` + `.json`: Goon Fall's colossus (`giants` in the script's `CONFIG`), cut from
+  the open-armed statue reference and recoloured to the game's goo palette from its own shading,
+  with extra drips hanging off its lower edges (none off the head). The builder can also make a
+  giant from a fighter frame, rebuilding the shading from the silhouette. The JSON holds the eye
+  positions for the glow.
 
 `node scripts/build-sprites.mjs --debug <dir>` writes a preview of the frames over green with
 baseline/anchor guides. Per-frame anchor nudges live in the script's `CONFIG`.

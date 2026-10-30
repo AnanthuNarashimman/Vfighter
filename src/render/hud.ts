@@ -1,7 +1,7 @@
 import { Container, Graphics, Text, type Ticker } from 'pixi.js';
 import { CATACLYSMS, ENERGY_MAX, GUARD_MAX, GUARD_RAISE_MIN, HEALTH_MAX } from '../sim/constants';
-import { MOVES } from '../sim/moves';
-import type { Element } from '../sim/moves';
+import { MOVES, kitHasMove } from '../sim/moves';
+import type { Element, Kit, MoveId } from '../sim/moves';
 import type { FighterState, GameState } from '../sim/state';
 import { CHARACTERS, type CharacterDef, type HudPalette } from './characters';
 import type { ViewLayout } from './layout';
@@ -53,25 +53,27 @@ const CONTROLS_FADE_MS = 600;
 /** Vertical distance between the two players' control strips. */
 const CONTROLS_ROW = 32;
 
-type ControlHint = readonly [keys: readonly string[], label: string];
+/** `move`: listed only for fighters whose kit has it. */
+type ControlHint = readonly [keys: readonly string[], label: string, move?: MoveId];
 
 /** Per player, matching input/keyboard.ts PLAYER_BINDINGS. The last entry is the dev-only character switch (see main.ts). */
 const CONTROLS: readonly (readonly ControlHint[])[] = [
   [
-    [['A', 'D'], 'move'], [['W'], 'jump'], [['S'], 'duck'], [['K'], 'kick'], [['J'], 'blast'], [['L'], 'beam'],
-    [['I'], 'block'], [['O'], 'super'], [['C'], 'switch fighter'],
+    [['A', 'D'], 'move'], [['W'], 'jump'], [['S'], 'duck'], [['K'], 'kick'], [['J'], 'blast', 'blast'],
+    [['L'], 'beam', 'beam'], [['I'], 'block'], [['O'], 'super', 'super'], [['C'], 'switch fighter'],
   ],
   [
-    [['←', '→'], 'move'], [['↑'], 'jump'], [['↓'], 'duck'], [['.'], 'kick'], [[','], 'blast'], [['/'], 'beam'],
-    [['R-Shift'], 'block'], [['Enter'], 'super'], [['M'], 'switch fighter'],
+    [['←', '→'], 'move'], [['↑'], 'jump'], [['↓'], 'duck'], [['.'], 'kick'], [[','], 'blast', 'blast'],
+    [['/'], 'beam', 'beam'], [['R-Shift'], 'block'], [['Enter'], 'super', 'super'], [['M'], 'switch fighter'],
   ],
 ];
 /** Each player's super key, for the SUPER READY tag. */
 const SUPER_KEYS = ['O', 'Enter'] as const;
-/** Each element's super: its name on the countdown and its colours. */
-const SUPER_LOOK: Readonly<Record<Element, { name: string; label: number; bar: number; trough: number }>> = {
+/** Each element's super: its name on the countdown (null: not named while it runs) and its colours. */
+const SUPER_LOOK: Readonly<Record<Element, { name: string | null; label: number; bar: number; trough: number }>> = {
   fire: { name: 'INFERNO', label: 0xffb347, bar: 0xff6a1a, trough: 0x2a0a04 },
   thunder: { name: 'TEMPEST', label: 0xa8d4ff, bar: 0x5cb4ff, trough: 0x0a1428 },
+  goo: { name: null, label: 0xfffbf0, bar: 0xf3f0e6, trough: 0x1e1c18 },
 };
 
 /**
@@ -87,11 +89,18 @@ export class Hud {
   private readonly banner = new Container();
   private readonly koText: Text;
   private readonly winnerText: Text;
+  /** Each player's kit, so the controls strip only lists moves they have. */
+  private readonly kits: Kit[] = ['full', 'full'];
+  private view: ViewLayout | null = null;
   private time = 0;
   private controlsShownAt = 0;
   private sinceFpsUpdate = 0;
 
-  constructor(target: Window = window) {
+  /** `players`: 2 for a versus match, 1 for solo testing (one panel, one controls strip). */
+  constructor(
+    private readonly players = 2,
+    target: Window = window,
+  ) {
     this.panels = [new PlayerPanel(0), new PlayerPanel(1)];
     this.buildControls();
 
@@ -121,13 +130,19 @@ export class Hud {
 
   setCharacter(player: number, character: CharacterDef): void {
     this.panels[player]?.setCharacter(character);
+    if (this.kits[player] === character.kit) return;
+    this.kits[player] = character.kit;
+    this.buildControls();
+    if (this.view) this.layout(this.view);
   }
 
   layout(view: ViewLayout): void {
+    this.view = view;
     this.panels[1].root.position.x = view.width;
     this.fps.position.set(view.width - 10, view.height - 22);
     this.banner.position.set(view.width / 2, Math.round(view.height * 0.36));
-    this.controls.position.set(Math.round((view.width - this.controls.width) / 2), view.height - 34 - CONTROLS_ROW);
+    const rows = Math.min(this.players, CONTROLS.length);
+    this.controls.position.set(Math.round((view.width - this.controls.width) / 2), view.height - 34 - CONTROLS_ROW * (rows - 1));
     this.controlsHint.position.set(Math.round((view.width - this.controlsHint.width) / 2), view.height - 34);
   }
 
@@ -165,14 +180,16 @@ export class Hud {
   }
 
   private buildControls(): void {
-    const rows = CONTROLS.map((hints, player) => {
+    for (const c of [this.controls, this.controlsHint]) c.removeChildren().forEach((child) => child.destroy({ children: true }));
+    const rows = CONTROLS.slice(0, this.players).map((hints, player) => {
       const row = new Container();
       const tag = new Text({ text: `P${player + 1}`, style: { ...TITLE_STYLE, stroke: { color: 0x000000, width: 3 } } });
       tag.position.set(14, 2);
       row.addChild(tag);
       let cx = 14 + tag.width + 12;
       // Character switching is a local testing aid, so it is only listed in dev builds.
-      for (const [keys, label] of import.meta.env.DEV ? hints : hints.slice(0, -1)) {
+      for (const [keys, label, move] of import.meta.env.DEV ? hints : hints.slice(0, -1)) {
+        if (move && !kitHasMove(this.kits[player], move)) continue;
         for (const k of keys) {
           cx += keyCap(row, k, cx) + 3;
         }
@@ -185,9 +202,10 @@ export class Hud {
     });
     const hide = new Text({ text: 'H hide', style: { ...LABEL_STYLE, fontWeight: '400' } });
     hide.alpha = 0.6;
-    hide.position.set(rows[1].width, 3);
-    rows[1].row.addChild(hide);
-    rows[1].width += hide.width + 14;
+    const last = rows[rows.length - 1];
+    hide.position.set(last.width, 3);
+    last.row.addChild(hide);
+    last.width += hide.width + 14;
 
     const width = Math.max(...rows.map((r) => r.width));
     rows.forEach(({ row, width: w }, i) => {
@@ -266,7 +284,11 @@ class PlayerPanel {
   /** `superLeft`: share of this player's super (cataclysm) still to run, or null if none is. */
   update(f: FighterState, deltaMs: number, time: number, superLeft: number | null): void {
     const dt = deltaMs / 1000;
-    this.drawSuper(f, superLeft, time);
+    // Without energy moves the gauge means nothing; without a super, neither does a full gauge.
+    this.gauge.visible = kitHasMove(f.kit, 'blast');
+    const hasSuper = kitHasMove(f.kit, 'super');
+    this.superTag.visible = this.superBar.visible = hasSuper;
+    if (hasSuper) this.drawSuper(f, superLeft, time);
     // The fill tracks energy closely; a pale ghost lingers where it was so spending reads clearly.
     this.shownEnergy += (f.energy - this.shownEnergy) * Math.min(1, dt * 20);
     this.ghostEnergy = f.energy >= this.ghostEnergy ? f.energy : Math.max(f.energy, this.ghostEnergy - GHOST_SPEED * dt);
@@ -292,8 +314,8 @@ class PlayerPanel {
       this.superTag.style.fill = look.label;
     }
     if (superLeft !== null) {
-      this.superTag.visible = true;
-      this.superTag.text = look.name;
+      this.superTag.visible = look.name !== null;
+      if (look.name !== null) this.superTag.text = look.name;
       this.superTag.alpha = 0.85 + 0.15 * Math.sin(time * 0.02);
       const x = BAR.x + BAR.width + 18;
       const w = 96;

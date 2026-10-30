@@ -1,8 +1,8 @@
 import { Sprite, type Texture } from 'pixi.js';
 import type { ViewLayout } from './layout';
 
-/** Extra cover on every side, so camera shake (both supers at once: up to ~30px) never shows past the painting's edge. */
-const OVERSCAN = 32;
+/** Extra cover on every side, so camera shake (all three supers at once: up to ~42px) never shows past the painting's edge. */
+const OVERSCAN = 44;
 
 /**
  * Stage background that always covers the whole view while keeping its painted floor line
