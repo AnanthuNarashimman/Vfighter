@@ -1,5 +1,5 @@
 import { NO_INPUT, type InputFrame } from './input';
-import type { Element, MoveId } from './moves';
+import type { Element, Kit, MoveId } from './moves';
 import { COUNTER_CAP, ENERGY_MAX, GUARD_MAX, HEALTH_MAX, STAGE_WIDTH } from './constants';
 
 /**
@@ -8,9 +8,20 @@ import { COUNTER_CAP, ENERGY_MAX, GUARD_MAX, HEALTH_MAX, STAGE_WIDTH } from './c
  */
 export type Action = 'idle' | 'walk' | 'air' | 'crouch' | 'block' | 'hit' | 'ko' | MoveId;
 
-export interface FighterState {
-  /** Decides the fighter's super (the character's look is the renderer's business). */
+/** The gameplay side of a character (its look is the renderer's business). */
+export interface Loadout {
+  /** Decides the fighter's super. */
   readonly element: Element;
+  /** Which moves the fighter has. */
+  readonly kit: Kit;
+}
+
+export const DEFAULT_LOADOUTS: readonly Loadout[] = [
+  { element: 'fire', kit: 'full' },
+  { element: 'thunder', kit: 'full' },
+];
+
+export interface FighterState extends Loadout {
   /** Horizontal centre, stage px. */
   readonly x: number;
   /** Feet height above the floor, px (0 = standing on the floor, positive = up). */
@@ -44,6 +55,8 @@ export interface FighterState {
   readonly shove: number;
   /** Ticks left during which super strikes can't hit this fighter (after one just did). */
   readonly strikeGrace: number;
+  /** Ticks left with goo stuck to them: trapped in place, then slowed (see TRAP). */
+  readonly trapped: number;
   /** Remaining ticks of hitstun while `action` is 'hit'. */
   readonly hitstun: number;
   /** The current move already connected (a kick hits once). */
@@ -136,9 +149,14 @@ export function setAction(f: Mutable<FighterState>, action: Action): void {
   f.beamBlocked = false;
 }
 
-export function createFighter(x: number, facing: 1 | -1, element: Element = 'fire'): FighterState {
+export function loadoutOf(f: FighterState): Loadout {
+  return { element: f.element, kit: f.kit };
+}
+
+export function createFighter(x: number, facing: 1 | -1, loadout: Loadout = DEFAULT_LOADOUTS[0]): FighterState {
   return {
-    element,
+    element: loadout.element,
+    kit: loadout.kit,
     x,
     y: 0,
     vx: 0,
@@ -159,6 +177,7 @@ export function createFighter(x: number, facing: 1 | -1, element: Element = 'fir
     guardBrokenTick: COUNTER_CAP,
     shove: 0,
     strikeGrace: 0,
+    trapped: 0,
     hitstun: 0,
     moveHit: false,
     beamBlocked: false,
@@ -168,17 +187,22 @@ export function createFighter(x: number, facing: 1 | -1, element: Element = 'fir
 
 /**
  * `nextProjectileId` (also used for strike ids) carries over between rounds so the renderer
- * never confuses old and new effects; `elements` carry over so each player keeps their character.
+ * never confuses old and new effects; `loadouts` carry over so each player keeps their character.
+ * One fighter per loadout: two face off from either side; a lone one (solo testing) starts in the middle.
  */
 export function createInitialState(
   seed = 1,
   nextProjectileId = 1,
-  elements: readonly Element[] = ['fire', 'thunder'],
+  loadouts: readonly Loadout[] = DEFAULT_LOADOUTS,
 ): GameState {
+  const fighters =
+    loadouts.length === 1
+      ? [createFighter(STAGE_WIDTH * 0.5, 1, loadouts[0])]
+      : loadouts.map((l, i) => createFighter(STAGE_WIDTH * (i === 0 ? 0.3 : 0.7), i === 0 ? 1 : -1, l));
   return {
     tick: 0,
     rngSeed: seed >>> 0,
-    fighters: [createFighter(STAGE_WIDTH * 0.3, 1, elements[0]), createFighter(STAGE_WIDTH * 0.7, -1, elements[1])],
+    fighters,
     projectiles: [],
     nextProjectileId,
     clashes: [],

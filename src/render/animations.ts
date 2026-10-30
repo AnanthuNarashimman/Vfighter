@@ -36,6 +36,8 @@ const MOVE_FRAMES: Record<MoveId, Record<MovePhase, FrameName>> = {
   super: { startup: 'blast_charge', active: 'punch_extend', recovery: 'punch_windup' },
   // Drawing the charge in, then flinging an open palm out to call the storm.
   storm: { startup: 'blast_charge', active: 'blast_release', recovery: 'blast_release' },
+  // Gathering the goo, then flinging the arms out to raise the giant.
+  goonFall: { startup: 'blast_charge', active: 'blast_release', recovery: 'blast_release' },
 };
 
 /** Pure view of the simulation: which sprite frame represents this fighter right now. */

@@ -1,3 +1,5 @@
+import type { Element } from './moves';
+
 /**
  * Simulation tuning. Units: stage pixels (1280-wide stage) and ticks (60 per second).
  * Keep simulation math to + - * / and comparisons so it stays deterministic across machines.
@@ -96,6 +98,10 @@ export interface CataclysmDef {
   readonly fadeTicks: number;
   readonly halfWidth: number;
   readonly height: number;
+  /** After this super's strike hits someone, no strike can hit them again for this long (default STRIKE_GRACE_TICKS). */
+  readonly grace?: number;
+  /** Ticks from the super landing to its first strike (default 8), e.g. to let an entrance play out. */
+  readonly firstStrike?: number;
 }
 
 /**
@@ -104,7 +110,7 @@ export interface CataclysmDef {
  */
 export const STRIKE_GRACE_TICKS = 70;
 
-export const CATACLYSMS: Readonly<Record<'fire' | 'thunder', CataclysmDef>> = {
+export const CATACLYSMS: Readonly<Record<Element, CataclysmDef>> = {
   // Inferno: the ground cracks, glows, and erupts in a roaring lava column.
   fire: {
     ticks: 540,
@@ -130,7 +136,30 @@ export const CATACLYSMS: Readonly<Record<'fire' | 'thunder', CataclysmDef>> = {
     halfWidth: 34,
     height: 2000,
   },
+  // Goon Fall, the strongest super: a colossus of goo rises out of the valley (a ~2s entrance before
+  // anything falls), then goo balls rain down. Each falls in sight for a moment (its shadow marks the
+  // spot), then splats: lighter hits than an eruption, but far more often, mostly aimed at the
+  // opponent, with a short grace, and each one traps (see TRAP) so the next is hard to escape.
+  goo: {
+    ticks: 660,
+    firstStrike: 128,
+    interval: { min: 11, max: 24 },
+    aim: 0.62,
+    aimSpread: 90,
+    warnTicks: 22,
+    activeTicks: 4,
+    fadeTicks: 70,
+    halfWidth: 50,
+    height: 320,
+    grace: 20,
+  },
 };
+
+/**
+ * Goo stuck to a fighter (from a Goon Fall strike) for `ticks`: for the first `stuckTicks` they
+ * can't walk or jump at all (they can still block and attack), then they move at `slow` speed.
+ */
+export const TRAP = { ticks: 100, stuckTicks: 45, slow: 0.4 } as const;
 
 /** Projectiles are removed once this far outside the stage. */
 export const PROJECTILE_DESPAWN_MARGIN = 400;

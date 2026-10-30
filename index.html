@@ -20,6 +20,25 @@
         height: 100vh;
         display: block;
       }
+      #mode-button {
+        position: fixed;
+        top: 12px;
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 1;
+        padding: 6px 16px;
+        font: italic 900 13px system-ui, 'Segoe UI', Arial, sans-serif;
+        letter-spacing: 0.5px;
+        color: #fff;
+        background: rgba(0, 0, 0, 0.45);
+        border: 2px solid rgba(243, 230, 207, 0.7);
+        border-radius: 14px;
+        cursor: pointer;
+      }
+      #mode-button:hover {
+        background: rgba(0, 0, 0, 0.7);
+        border-color: #f3e6cf;
+      }
     </style>
   </head>
   <body>

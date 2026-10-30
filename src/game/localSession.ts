@@ -1,7 +1,6 @@
 import type { InputSource } from '../input/keyboard';
 import { TICK_MS } from '../sim/constants';
-import type { Element } from '../sim/moves';
-import type { GameState } from '../sim/state';
+import type { GameState, Loadout } from '../sim/state';
 import { step } from '../sim/step';
 
 /** Never simulate more than this many ticks per frame (avoids a spiral after a long stall). */
@@ -26,13 +25,13 @@ export class LocalSession {
   }
 
   /**
-   * Change which element (and so which super) a fighter has, for switching characters while
-   * testing locally. Patches both kept states so interpolation stays consistent.
+   * Change a fighter's element (and so super) and kit, for switching characters while testing
+   * locally. Patches both kept states so interpolation stays consistent.
    */
-  setElement(fighter: number, element: Element): void {
+  setLoadout(fighter: number, loadout: Loadout): void {
     const patch = (s: GameState): GameState => ({
       ...s,
-      fighters: s.fighters.map((f, i) => (i === fighter ? { ...f, element } : f)),
+      fighters: s.fighters.map((f, i) => (i === fighter ? { ...f, element: loadout.element, kit: loadout.kit } : f)),
     });
     this.previous = patch(this.previous);
     this.current = patch(this.current);

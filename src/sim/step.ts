@@ -21,14 +21,16 @@ import {
   SHOVE_FRICTION,
   STAGE_MARGIN,
   STAGE_WIDTH,
+  TRAP,
   WALK_SPEED,
 } from './constants';
 import { stepCataclysms } from './cataclysm';
 import { resolveCombat, strikeHits } from './combat';
 import { NO_INPUT, type Button, type InputFrame } from './input';
-import { MOVES, MOVE_PRIORITY, MUZZLE, isMoveId, phaseAt, sustainEndTick, type MoveId } from './moves';
+import { MOVES, MOVE_PRIORITY, MUZZLE, isMoveId, kitHasMove, phaseAt, sustainEndTick, type MoveId } from './moves';
 import {
   createInitialState,
+  loadoutOf,
   setAction,
   type Action,
   type FighterState,
@@ -46,7 +48,7 @@ export type ProjectileSpawn = Pick<ProjectileState, 'x' | 'y' | 'vx'>;
  */
 export function step(state: GameState, inputs: readonly InputFrame[]): GameState {
   if (state.ko && state.ko.tick >= KO_RESET_TICKS) {
-    return createInitialState(state.rngSeed, state.nextProjectileId, state.fighters.map((f) => f.element));
+    return createInitialState(state.rngSeed, state.nextProjectileId, state.fighters.map(loadoutOf));
   }
 
   const spawned: ProjectileState[] = [];
@@ -110,6 +112,10 @@ export function stepFighter(
   f.guardIdleTicks = Math.min(prev.guardIdleTicks + 1, COUNTER_CAP);
   f.guardBrokenTick = Math.min(prev.guardBrokenTick + 1, COUNTER_CAP);
   f.strikeGrace = Math.max(0, prev.strikeGrace - 1);
+  f.trapped = Math.max(0, prev.trapped - 1);
+  // Goo stuck to the fighter: first glued in place, then wading through it.
+  const stuck = f.trapped > TRAP.ticks - TRAP.stuckTicks;
+  const pace = stuck ? 0 : f.trapped > 0 ? TRAP.slow : 1;
 
   if (f.action === 'hit') {
     f.hitstun = Math.max(0, f.hitstun - 1);
@@ -159,11 +165,12 @@ export function stepFighter(
       f.vx *= HIT_FRICTION;
       f.guard = Math.max(0, f.guard - GUARD_HOLD_DRAIN);
       f.guardIdleTicks = 0;
-    } else if (f.jumpBuffer > 0) {
+    } else if (f.jumpBuffer > 0 && !stuck) {
       f.jumpBuffer = 0;
       f.grounded = false;
-      f.vy = JUMP_VELOCITY;
-      f.vx = dir * AIR_SPEED;
+      // Wading through goo: a feeble hop.
+      f.vy = JUMP_VELOCITY * (pace < 1 ? 0.7 : 1);
+      f.vx = dir * AIR_SPEED * pace;
       setAction(f, 'air');
     } else if (input.down) {
       // Ducking lasts as long as it is held; no walking while down.
@@ -172,13 +179,13 @@ export function stepFighter(
     } else {
       const next: Action = dir !== 0 ? 'walk' : 'idle';
       if (next !== f.action) setAction(f, next);
-      f.vx = dir * WALK_SPEED;
+      f.vx = dir * WALK_SPEED * pace;
     }
   } else {
     // Air control (no double jump: jumping only starts from the ground). With an opponent, facing
     // is kept through the jump and corrected on landing.
     if (dir !== 0 && opponentX === undefined) f.facing = dir;
-    f.vx = dir * AIR_SPEED;
+    f.vx = dir * AIR_SPEED * pace;
   }
 
   if (f.action !== 'block' && f.guardIdleTicks >= GUARD_REGEN_DELAY) {
@@ -222,6 +229,7 @@ function beamReach(f: FighterState): number {
 
 function tryStartMove(f: Mutable<FighterState>, id: MoveId): boolean {
   const move = MOVES[id];
+  if (!kitHasMove(f.kit, id)) return false;
   if (move.element && move.element !== f.element) return false;
   if (!f.grounded && !move.allowedInAir) return false;
   const cost = move.energyCost ?? 0;

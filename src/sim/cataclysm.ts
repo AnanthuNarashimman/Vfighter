@@ -36,9 +36,9 @@ export function stepCataclysms(
     if (!isMoveId(f.action) || !MOVES[f.action].cataclysm) return;
     const phase = phaseAt(MOVES[f.action], f.actionTick, f.moveSustained);
     if (phase?.phase !== 'active' || phase.tick !== 0) return;
-    // The first strike follows the super almost at once.
+    // The first strike follows the super almost at once (unless the super has an entrance).
     active = active.filter((c) => c.owner !== owner);
-    active.push({ owner, kind: f.element, tick: 0, nextStrikeIn: 8 });
+    active.push({ owner, kind: f.element, tick: 0, nextStrikeIn: CATACLYSMS[f.element].firstStrike ?? 8 });
   });
 
   const aged = strikes

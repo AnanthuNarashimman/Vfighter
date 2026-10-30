@@ -40,6 +40,28 @@ const SKID_SHEET = {
   matchBy: 'area',
 };
 
+/**
+ * Gooner's own defense poses: block and duck side by side on top, skid alone underneath (so the rows
+ * have different column counts). All three are drawn at one size, so one scale fits them all.
+ */
+const GOONER_POSES = {
+  sheet: 'images/Magenta Fighter Pose Sheet.png',
+  rows: 2,
+  cols: [2, 1],
+  match: ['block', 'punch_windup'],
+};
+
+/**
+ * Spill tolerance (see makeSpillModel) for colours on the far side of the key's hue, for sheets
+ * whose art has key-like colours of its own: Gooner's purple sash is close to the magenta key, and
+ * the default would eat it. The sash leans blue where the key leans red, so only bluish pixels get
+ * this tolerance; reddish fringes (where skin meets the key) still get the default.
+ */
+const SPILL_TOLERANCE_AWAY = {
+  'images/Heavyset Fighter Sprite Sheet.png': 140,
+  'images/Magenta Fighter Pose Sheet.png': 140,
+};
+
 const CONFIG = {
   fighters: [
     {
@@ -80,8 +102,42 @@ const CONFIG = {
         { ...SKID_SHEET, cells: { skid: 1 } },
       ],
     },
+    {
+      id: 'gooner',
+      sheet: 'images/Heavyset Fighter Sprite Sheet.png',
+      rows: 3,
+      cols: 4,
+      // Same pose layout as the maroon sheet.
+      frames: [
+        'idle_stance', 'idle_breathe', 'walk_1', 'walk_2',
+        'punch_windup', 'punch_extend', 'kick_windup', 'kick_high',
+        'blast_charge', 'blast_release', 'jump_air', 'hit_recoil',
+      ],
+      standingFrame: 'idle_stance',
+      anchorNudge: {},
+      extras: [{ ...GOONER_POSES, cells: { block: 0, duck: 1, skid: 2 } }],
+    },
   ],
   stages: [{ id: 'valley', image: 'images/Serene Fantasy Valley Panorama.png' }],
+  // Giants of goo for supers (see buildGiant). The source is a fighter's frame (`fighter` + `frame`)
+  // or a whole image (`image`). `shading`: 'form' rebuilds the shading from the silhouette (for
+  // painted, coloured art), 'image' keeps the source's own (for art that is already a white statue).
+  // `eyes`: in source px. Drip lengths are in source px (before `upscale`); `dripFrom`: share of the
+  // height from the top with no drips.
+  giants: [
+    {
+      // Gooner as a giant of goo, facing the viewer with arms spread and palms open.
+      id: 'colossus',
+      image: 'images/Glossy Wax Warrior on Magenta.png',
+      shading: 'image',
+      dripFrom: 0.22,
+      upscale: 1,
+      eyes: [[569, 196], [633, 177]],
+      dripChance: 0.05,
+      dripMin: 10,
+      dripMax: 40,
+    },
+  ],
   outDir: 'public/assets',
   framePad: 4, // transparent margin around the figures inside the shared frame canvas
   atlasGap: 2, // gap between frames in the atlas (prevents bleeding under linear filtering)
@@ -99,6 +155,7 @@ const keyedCache = new Map();
 
 for (const fighter of CONFIG.fighters) buildFighter(fighter);
 for (const stage of CONFIG.stages) copyStage(stage);
+for (const giant of CONFIG.giants) buildGiant(giant);
 
 // ---------------------------------------------------------------------------
 
@@ -238,24 +295,26 @@ function keyedSheet(file) {
   const sheet = PNG.sync.read(fs.readFileSync(path.join(ROOT, file)));
   const { width: W, height: H } = sheet;
   const bg = estimateBackground(sheet.data, W, H);
-  const px = removeBackground(sheet.data, W, H, bg);
+  const px = removeBackground(sheet.data, W, H, bg, SPILL_TOLERANCE_AWAY[file]);
   removeSpecks(px, W, H, CONFIG.minSpeck);
   const keyed = { px, W, H, bg };
   keyedCache.set(file, keyed);
   return keyed;
 }
 
-/** Tight boxes of the rows x cols figures, in reading order. */
+/** Tight boxes of the figures, in reading order. `cols` is one count for every row, or a count per row. */
 function findFigures({ px, W, H }, rows, cols) {
   const solid = (x, y) => px[(y * W + x) * 4 + 3] >= 128;
   const boxes = [];
-  for (const [y0, y1] of splitBands(projection(H, (y) => countRow(solid, W, y)), rows, 'rows')) {
+  const rowBands = splitBands(projection(H, (y) => countRow(solid, W, y)), rows, 'rows');
+  for (const [row, [y0, y1]] of rowBands.entries()) {
     const colCounts = projection(W, (x) => {
       let n = 0;
       for (let y = y0; y <= y1; y++) if (solid(x, y)) n++;
       return n;
     });
-    for (const [x0, x1] of splitBands(colCounts, cols, 'columns')) boxes.push(tightBox(solid, x0, y0, x1, y1));
+    const want = Array.isArray(cols) ? cols[row] : cols;
+    for (const [x0, x1] of splitBands(colCounts, want, 'columns')) boxes.push(tightBox(solid, x0, y0, x1, y1));
   }
   return boxes;
 }
@@ -309,6 +368,205 @@ function scaleFigure(px, W, b, s) {
   return { ...tightBox(solid, 0, 0, w - 1, h - 1), px: out, stride: w };
 }
 
+/**
+ * A giant made of goo from one of a fighter's poses: the figure is cut from the fighter's sheet,
+ * upsampled, its shading turned into glossy white goo (soft cool shadows, cream body, white
+ * sheen where the form bulges) with the fine painted detail smoothed away, and goo drips hanging
+ * off every downward-facing edge. Writes supers/<id>.png and supers/<id>.json (eye positions in
+ * texture px, for the glow).
+ */
+function buildGiant(cfg) {
+  const fighter = cfg.fighter && CONFIG.fighters.find((f) => f.id === cfg.fighter);
+  const file = cfg.image ?? fighter.sheet;
+  const src = path.join(ROOT, file);
+  const dstPng = path.join(ROOT, CONFIG.outDir, 'supers', `${cfg.id}.png`);
+  const dstJson = path.join(ROOT, CONFIG.outDir, 'supers', `${cfg.id}.json`);
+  if (ifStale && isFresh([dstPng, dstJson], [src])) return;
+
+  const sheet = keyedSheet(file);
+  const box = fighter
+    ? findFigures(sheet, fighter.rows, fighter.cols)[fighter.frames.indexOf(cfg.frame)]
+    : tightBox((x, y) => sheet.px[(y * sheet.W + x) * 4 + 3] > 0, 0, 0, sheet.W - 1, sheet.H - 1);
+  const k = cfg.upscale;
+  const fig = scaleFigure(sheet.px, sheet.W, box, k);
+  const w = fig.x1 - fig.x0 + 1;
+  const h0 = fig.y1 - fig.y0 + 1;
+  const drip = Math.round(cfg.dripMax * k);
+  const h = h0 + drip;
+  const at = (x, y) => ((fig.y0 + y) * fig.stride + fig.x0 + x) * 4;
+  const alpha = new Float32Array(w * h);
+  const lum = new Float32Array(w * h);
+  for (let y = 0; y < h0; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = at(x, y);
+      alpha[y * w + x] = fig.px[i + 3] / 255;
+      lum[y * w + x] = (0.3 * fig.px[i] + 0.59 * fig.px[i + 1] + 0.11 * fig.px[i + 2]) / 255;
+    }
+  }
+
+  // Goo is one colour, so the painting's colours (dark vest, pale trousers) must not show; only its
+  // shapes may. Two sources of form:
+  // - the silhouette, puffed up like a pillow: blurring the alpha gives a height field that rises
+  //   inward from every edge; lit from the upper left it rounds every limb and fold of cloth;
+  // - the painted shading with its colours removed: the painting minus a broad blur of itself keeps
+  //   the folds, muscles and face but not which garment is which colour.
+  const smooth = blurMasked(lum, alpha, w, h, Math.round(0.6 * k));
+  const broad = blurMasked(lum, alpha, w, h, Math.round(7 * k));
+  const height = boxBlur(alpha, w, h, Math.round(5 * k));
+  const fine = boxBlur(alpha, w, h, Math.round(1.5 * k));
+  const light = (() => {
+    const l = [-0.55, -0.7, 0.45];
+    const n = Math.hypot(...l);
+    return l.map((c) => c / n);
+  })();
+
+  // 'image' shading: the source's own light, stretched to the goo palette.
+  const solid = [];
+  for (let p = 0; p < w * h; p++) if (alpha[p] > 0.5) solid.push(smooth[p]);
+  solid.sort((a, b) => a - b);
+  const lo = solid[Math.floor(solid.length * 0.03)];
+  const hi = solid[Math.floor(solid.length * 0.99)];
+  const imageColor = (p) => {
+    const n = Math.min(1, Math.max(0, (smooth[p] - lo) / (hi - lo)));
+    const sheen = Math.min(1, Math.max(0, (smooth[p] - broad[p]) * 3));
+    return gooColor(0.12 + 0.88 * Math.pow(n, 1.15), sheen);
+  };
+
+  const out = new PNG({ width: w, height: h });
+  const colorAt = (p) => {
+    if (cfg.shading === 'image') return imageColor(p);
+    const x = p % w;
+    const y = (p / w) | 0;
+    const hAt = (xx, yy) => (xx < 0 || yy < 0 || xx >= w || yy >= h ? 0 : height[yy * w + xx] * 0.6 + fine[yy * w + xx] * 0.4);
+    const gx = (hAt(x + 1, y) - hAt(x - 1, y)) * 0.5;
+    const gy = (hAt(x, y + 1) - hAt(x, y - 1)) * 0.5;
+    // Surface normal of the puffed silhouette (steeper near the edges).
+    const bump = 9;
+    const nx = -gx * bump;
+    const ny = -gy * bump;
+    const nl = Math.hypot(nx, ny, 1);
+    const diffuse = Math.max(0, (nx * light[0] + ny * light[1] + light[2]) / nl);
+    // Specular: the light's reflection, a tight hot spot where the surface faces between light and eye.
+    const half = [light[0], light[1], light[2] + 1];
+    const hl = Math.hypot(...half);
+    const spec = Math.pow(Math.max(0, (nx * half[0] + ny * half[1] + half[2]) / nl / hl), 24);
+    const detail = (smooth[p] - broad[p]) * 2.6;
+    const v = Math.min(1, Math.max(0, 0.34 + 0.62 * diffuse + detail));
+    const sheen = Math.min(1, spec * 1.6 + Math.max(0, detail - 0.08) * 2.5);
+    return gooColor(v, sheen);
+  };
+  for (let p = 0; p < w * h0; p++) {
+    if (alpha[p] <= 0) continue;
+    const c = colorAt(p);
+    out.data.set([c[0], c[1], c[2], Math.round(alpha[p] * 255)], p * 4);
+  }
+
+  // Drips: from bottom edges (solid above, empty below), seeded so the build is repeatable.
+  let seed = 12345;
+  const rand = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
+  let lastDrip = -Infinity;
+  const drips = [];
+  for (let x = 2; x < w - 2; x++) {
+    // None off the head (drips hanging from hair read as earrings).
+    for (let y = Math.max(4, Math.round(h0 * (cfg.dripFrom ?? 0))); y < h0 - 4; y++) {
+      const p = y * w + x;
+      // The last solid pixel above empty space (the edge itself is a few px soft).
+      if (alpha[p] < 0.6 || alpha[p + w] >= 0.6 || alpha[p + 3 * w] > 0.1) continue;
+      if (Math.abs(x - lastDrip) < 5 * k || rand() > cfg.dripChance) continue;
+      lastDrip = x;
+      drips.push({ x, y, len: (cfg.dripMin + rand() * (cfg.dripMax - cfg.dripMin)) * k * (0.4 + 0.6 * rand()), r: (2.6 + rand() * 2.6) * k, c: gooColor(0.8, 0) });
+    }
+  }
+  for (const d of drips) {
+    // A thin neck (with a small fillet where it leaves the edge) running down into a round bead.
+    const bead = d.r;
+    for (let yy = 0; yy <= d.len + bead; yy++) {
+      const t = Math.min(1, yy / d.len);
+      const neck = yy <= d.len ? d.r * (0.42 + 0.6 * (1 - t) ** 6) : 0;
+      const round = Math.sqrt(Math.max(0, bead * bead - (yy - d.len) ** 2));
+      const half = Math.max(neck, round);
+      const yAt = Math.round(d.y + yy);
+      if (yAt >= h) break;
+      for (let xx = Math.floor(d.x - half - 1); xx <= Math.ceil(d.x + half + 1); xx++) {
+        if (xx < 0 || xx >= w) continue;
+        const cover = Math.min(1, Math.max(0, half + 0.5 - Math.abs(xx - d.x)));
+        if (cover <= 0) continue;
+        const q = (yAt * w + xx) * 4;
+        // Lit down the left of the bead, shaded on the right.
+        const shade = 1 - 0.18 * ((xx - d.x) / Math.max(1, half) + 1);
+        const a = Math.max(out.data[q + 3], Math.round(cover * 255));
+        out.data[q] = Math.round(d.c[0] * shade);
+        out.data[q + 1] = Math.round(d.c[1] * shade);
+        out.data[q + 2] = Math.round(d.c[2] * shade);
+        out.data[q + 3] = a;
+        if (Math.abs(xx - (d.x - half * 0.35)) < 0.6 && yy > 2) out.data.set([255, 255, 255], q);
+      }
+    }
+  }
+
+  // Eyes: from sheet px to texture px.
+  const eyes = cfg.eyes.map(([ex, ey]) => ({ x: (ex - box.x0) * k - fig.x0, y: (ey - box.y0) * k - fig.y0 }));
+  fs.mkdirSync(path.dirname(dstPng), { recursive: true });
+  fs.writeFileSync(dstPng, PNG.sync.write(out));
+  fs.writeFileSync(dstJson, JSON.stringify({ size: { w, h }, eyes, bodyHeight: h0 }, null, 2));
+  console.log(`[sprites] giant ${cfg.id}: ${cfg.image ?? `${cfg.fighter} ${cfg.frame}`}, ${w}x${h}, ${drips.length} drips`);
+  if (debugDir) writeDebugPreview(out, { frames: {} }, path.join(debugDir, `${cfg.id}-preview.png`));
+}
+
+/** Goo colour for a shading value (0 dark .. 1 light) plus sheen: cool lavender shadows to cream to white. */
+function gooColor(v, sheen) {
+  const stops = [
+    [0, [92, 86, 108]],
+    [0.4, [182, 176, 190]],
+    [0.75, [228, 223, 214]],
+    [1, [250, 248, 242]],
+  ];
+  let c = stops[stops.length - 1][1];
+  for (let i = 1; i < stops.length; i++) {
+    if (v > stops[i][0]) continue;
+    const [a, ca] = stops[i - 1];
+    const [b, cb] = stops[i];
+    const t = (v - a) / (b - a);
+    c = ca.map((x, j) => x + (cb[j] - x) * t);
+    break;
+  }
+  return c.map((x) => Math.round(Math.min(255, x + (255 - x) * sheen * 0.85)));
+}
+
+/** Plain box blur, radius `r`, two passes (close to a gaussian). */
+function boxBlur(v, w, h, r) {
+  return blurMasked(v, new Float32Array(w * h).fill(1), w, h, r);
+}
+
+/** Box blur of `v` over solid pixels only (weights by alpha), radius `r`, two passes. */
+function blurMasked(v, alpha, w, h, r) {
+  let cur = Float32Array.from(v, (x, i) => x * alpha[i]);
+  let wt = Float32Array.from(alpha);
+  for (let pass = 0; pass < 2; pass++) {
+    for (const horizontal of [true, false]) {
+      const nv = new Float32Array(w * h);
+      const nw = new Float32Array(w * h);
+      const len = horizontal ? w : h;
+      const lines = horizontal ? h : w;
+      for (let l = 0; l < lines; l++) {
+        const idx = (i) => (horizontal ? l * w + i : i * w + l);
+        let sv = 0, sw = 0;
+        for (let i = -r; i <= r; i++) if (i >= 0 && i < len) { sv += cur[idx(i)]; sw += wt[idx(i)]; }
+        for (let i = 0; i < len; i++) {
+          nv[idx(i)] = sv;
+          nw[idx(i)] = sw;
+          const add = i + r + 1, rem = i - r;
+          if (add < len) { sv += cur[idx(add)]; sw += wt[idx(add)]; }
+          if (rem >= 0) { sv -= cur[idx(rem)]; sw -= wt[idx(rem)]; }
+        }
+      }
+      cur = nv;
+      wt = nw;
+    }
+  }
+  return Float32Array.from(cur, (x, i) => (wt[i] > 1e-6 ? x / wt[i] : 0));
+}
+
 function copyStage(stage) {
   const src = path.join(ROOT, stage.image);
   const dst = path.join(ROOT, CONFIG.outDir, 'stages', `${stage.id}${path.extname(stage.image)}`);
@@ -337,7 +595,11 @@ function estimateBackground(px, W, H) {
     return v[v.length >> 1];
   };
   const color = [median(0), median(1), median(2)];
-  const dists = samples.map((i) => colorDist(px, i, color)).sort((a, b) => a - b);
+  // Border pixels far from the key are a figure touching the edge, not background noise.
+  const dists = samples
+    .map((i) => colorDist(px, i, color))
+    .filter((d) => d < 100)
+    .sort((a, b) => a - b);
   const noise = dists[Math.floor(dists.length * 0.995)];
   return { color, threshold: noise + 12 };
 }
@@ -353,10 +615,10 @@ function colorDist(px, i, c) {
  * edge pixels we treat the colour as a mix of the key and a nearby "pure" foreground colour, solve
  * for alpha, and un-mix the key out of the colour so no magenta fringe is left (no halo).
  */
-function removeBackground(px, W, H, bg) {
+function removeBackground(px, W, H, bg, awayTol) {
   const N = W * H;
   const B = bg.color;
-  const spill = makeSpillModel(B);
+  const spill = makeSpillModel(B, awayTol);
   const isBg = new Uint8Array(N);
   for (let p = 0; p < N; p++) if (colorDist(px, p * 4, B) <= bg.threshold) isBg[p] = 1;
 
@@ -373,7 +635,7 @@ function removeBackground(px, W, H, bg) {
       if (!near[p]) {
         // Interior. Small enclosed gaps (between hair strands, under an arm) are key-coloured
         // blends that never touch the open background; turn the key share into transparency.
-        const t = spill ? Math.min(1, Math.max(0, (spill.keyness(px, i) - spill.tol) / (spill.bgKey - spill.tol))) : 0;
+        const t = spill ? Math.min(1, Math.max(0, (spill.keyness(px, i) - spill.tol(px, i)) / (spill.bgKey - spill.tol(px, i)))) : 0;
         const a = t < 0.15 ? 1 : 1 - t;
         if (a < 0.05) continue;
         for (let c = 0; c < 3; c++) out[i + c] = Math.max(0, Math.min(255, Math.round((px[i + c] - (1 - a) * B[c]) / a)));
@@ -415,18 +677,23 @@ function removeBackground(px, W, H, bg) {
  * For a saturated key (magenta, green, ...) "keyness" = how much a colour leans towards the key hue:
  * min of the channels that are high in the key minus max of the channels that are low in it.
  * Returns null for unsaturated keys (white/grey), where hue-based spill removal does not apply.
+ * `tol(px, i)` is how much keyness a pixel may keep: 25, or `awayTol` (if given) for a pixel whose
+ * two high channels lean the opposite way to the key's (bluish purple against a reddish magenta).
  */
-function makeSpillModel(B) {
+function makeSpillModel(B, awayTol) {
   const hi = [0, 1, 2].filter((c) => B[c] >= 128);
   const lo = [0, 1, 2].filter((c) => B[c] < 128);
   if (!hi.length || !lo.length) return null;
   const keyness = (px, i) => Math.min(...hi.map((c) => px[i + c])) - Math.max(...lo.map((c) => px[i + c]));
-  return { hi, lo, keyness, bgKey: keyness(B, 0), tol: 25 };
+  const lean = (px, i) => px[i + hi[0]] - px[i + hi[1]];
+  const keyLean = hi.length === 2 ? Math.sign(lean(B, 0)) : 0;
+  const tol = (px, i) => (awayTol !== undefined && keyLean !== 0 && Math.sign(lean(px, i)) === -keyLean ? awayTol : 25);
+  return { hi, lo, keyness, bgKey: keyness(B, 0), tol };
 }
 
 /** Clamp the key hue out of a pixel so no tinted fringe survives: keyness <= tol. */
 function despill(out, i, spill) {
-  const excess = spill.keyness(out, i) - spill.tol;
+  const excess = spill.keyness(out, i) - spill.tol(out, i);
   if (excess > 0) for (const c of spill.hi) out[i + c] = Math.max(0, out[i + c] - excess);
 }
 

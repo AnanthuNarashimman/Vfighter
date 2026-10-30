@@ -1,5 +1,5 @@
 import { Container, Graphics, Sprite, type Texture, TilingSprite } from 'pixi.js';
-import { BEAM_MAX_LENGTH, GUARD_MAX, SHIELD_OPEN_TICKS, SHIELD_REACH } from '../sim/constants';
+import { BEAM_MAX_LENGTH, GUARD_MAX, SHIELD_OPEN_TICKS, SHIELD_REACH, STAGE_WIDTH } from '../sim/constants';
 import { MOVES, MUZZLE, phaseAt } from '../sim/moves';
 import type { FighterState, GameState, ProjectileState } from '../sim/state';
 import type { EnergyStyle } from './characters';
@@ -16,6 +16,7 @@ import {
   setSize,
   spawnCount,
 } from './fx';
+import { GooBallFx, GooDrops, GooFighterFx, gooSplash } from './gooView';
 import { FIGHTER_HEIGHT, FLOOR_Y } from './layout';
 import { bolt, boltPoint, Crackle, drawBolts, radialArcs, type Bolt, type BoltFrame, type BoltLayer } from './lightning';
 
@@ -26,12 +27,28 @@ interface EnergyTheme {
   readonly fringe: number;
   /** Electric: jagged arcs crackle around charges, blasts and through the beam. */
   readonly lightning: boolean;
+  /** Not energy but fluid: blasts and beams are drawn by gooView, hits splash instead of sparking. */
+  readonly fluid?: boolean;
+  /** The guard shield's form: the element's dome (default), or a holy holographic cross. */
+  readonly shield?: 'dome' | 'cross';
 }
 
 const THEMES: Readonly<Record<EnergyStyle, EnergyTheme>> = {
   fire: { core: 0xfff4d6, body: 0xffa63a, fringe: 0xff4a12, lightning: false },
   thunder: { core: 0xf4f9ff, body: 0x74bcff, fringe: 0x3f52ff, lightning: true },
+  goo: { core: 0xffffff, body: 0xf3f0e6, fringe: 0xcbc5b2, lightning: false, fluid: true, shield: 'cross' },
 };
+
+/** Seconds a fighter hit by goo keeps dripping it. */
+const GOOED_SECONDS = 1.6;
+
+/** A fired blast's look: energy or goo. */
+interface ShotFx {
+  readonly root: Container;
+  readonly ground: Sprite;
+  update(prev: ProjectileState, curr: ProjectileState, alpha: number, time: number, dt: number, particles: Particles): void;
+  destroy(): void;
+}
 
 /** Lightning bolt strokes at full strength, glow first. */
 function boltLayers(t: EnergyTheme, s: number, k: number): BoltLayer[] {
@@ -66,7 +83,12 @@ export class EnergyView {
   readonly ground = new Container();
   readonly root = new Container();
   private readonly fighters: FighterFx[] = [];
-  private readonly projectiles = new Map<number, ProjectileFx>();
+  private readonly projectiles = new Map<number, ShotFx>();
+  /** Loose goo (drops and puddles) and each goo fighter's charge/stream, see gooView.ts. */
+  private readonly goo = new GooDrops();
+  private readonly gooFighters: GooFighterFx[] = [];
+  /** Per fighter: seconds left dripping goo from a hit. */
+  private readonly gooed: number[] = [];
   private readonly particles = new Particles(MAX_PARTICLES);
   private readonly projectileLayer = new Container();
   private readonly clashes: ClashFx[] = [];
@@ -83,7 +105,8 @@ export class EnergyView {
   private time = 0;
 
   constructor() {
-    this.root.addChild(this.projectileLayer, this.particles.root);
+    this.ground.addChild(this.goo.floor);
+    this.root.addChild(this.projectileLayer, this.goo.air, this.particles.root);
   }
 
   /** Energy look for one fighter's charges, beams and (newly fired) blasts. */
@@ -108,11 +131,19 @@ export class EnergyView {
         this.root.addChildAt(fx.root, 0);
       }
       fx.update(prev.fighters[i] ?? f, f, alpha, this.time, dt, this.particles);
+      this.updateGooFighter(i, prev.fighters[i] ?? f, f, alpha, dt);
 
       const lost = (this.lastHealth[i] ?? f.health) - f.health;
       this.lastHealth[i] = f.health;
-      // Sparks in the attacker's colours, off the side of the body that took the hit.
-      if (lost > 0) impact(this.particles, f, lost, this.themeFor(curr.fighters.length === 2 ? 1 - i : i));
+      // Sparks in the attacker's colours, off the side of the body that took the hit; goo splashes and sticks.
+      const attacker = this.themeFor(curr.fighters.length === 2 ? 1 - i : i);
+      if (lost > 0 && attacker.fluid) {
+        gooSplash(this.goo, f.x + f.facing * FIGHTER_HEIGHT * 0.12, FLOOR_Y - (f.y + FIGHTER_HEIGHT * 0.62), 0, lost >= 20 ? 26 : 3);
+        this.gooed[i] = GOOED_SECONDS;
+      } else if (lost > 0) {
+        impact(this.particles, f, lost, attacker);
+      }
+      this.drip(i, f, dt);
 
       // A shield broken by a hit goes off like a blast of its own element (not one that just ran dry).
       if (f.guardBrokenTick < (this.lastBroken[i] ?? f.guardBrokenTick)) {
@@ -142,6 +173,33 @@ export class EnergyView {
     this.updateProjectiles(prev, curr, alpha, dt);
     this.updateClashes(curr, dt);
     this.particles.update(dt);
+    this.goo.update(dt);
+  }
+
+  private updateGooFighter(i: number, prev: FighterState, curr: FighterState, alpha: number, dt: number): void {
+    let fx = this.gooFighters[i];
+    if (!this.themeFor(i).fluid) {
+      fx?.hide();
+      return;
+    }
+    if (!fx) {
+      fx = this.gooFighters[i] = new GooFighterFx(this.goo);
+      this.root.addChildAt(fx.root, 0);
+    }
+    fx.update(prev, curr, alpha, this.time, dt);
+  }
+
+  /** Goo stuck on a fighter who was hit with it runs off them in drips for a while. */
+  private drip(i: number, f: FighterState, dt: number): void {
+    const left = (this.gooed[i] ?? 0) - dt;
+    this.gooed[i] = Math.max(0, left);
+    if (left <= 0) return;
+    let n = spawnCount(10 * (left / GOOED_SECONDS) * dt);
+    while (n-- > 0) {
+      const x = f.x + (Math.random() - 0.5) * FIGHTER_HEIGHT * 0.3;
+      const y = FLOOR_Y - (f.y + FIGHTER_HEIGHT * (0.35 + Math.random() * 0.4));
+      this.goo.add(x, y, f.vx * 30, 20, 2 + Math.random() * 2.5);
+    }
   }
 
   private updateClashes(curr: GameState, dt: number): void {
@@ -174,16 +232,21 @@ export class EnergyView {
       let fx = this.projectiles.get(p.id);
       if (!fx) {
         const theme = this.themeFor(p.owner);
-        fx = new ProjectileFx(theme);
+        fx = theme.fluid ? new GooBallFx(this.goo) : new ProjectileFx(theme);
         this.projectiles.set(p.id, fx);
         this.projectileLayer.addChild(fx.root);
         this.ground.addChild(fx.ground);
-        burst(this.particles, p.x, FLOOR_Y - p.y, Math.sign(p.vx), theme);
+        if (theme.fluid) gooSplash(this.goo, p.x, FLOOR_Y - p.y, Math.sign(p.vx), 10, 0.7);
+        else burst(this.particles, p.x, FLOOR_Y - p.y, Math.sign(p.vx), theme);
       }
       fx.update(before.get(p.id) ?? p, p, alpha, this.time, dt, this.particles);
     }
     for (const [id, fx] of this.projectiles) {
       if (alive.has(id)) continue;
+      // A goo ball that stopped on stage hit something: it splats.
+      if (fx instanceof GooBallFx && fx.position.x > 0 && fx.position.x < STAGE_WIDTH) {
+        gooSplash(this.goo, fx.position.x, fx.position.y, 0, 22, 0.9);
+      }
       fx.destroy();
       this.projectiles.delete(id);
     }
@@ -249,7 +312,8 @@ class FighterFx {
     const y = lerp(prev.y, curr.y, alpha);
     this.shield.update(curr, x, y, time, dt, particles);
 
-    if (curr.action !== 'blast' && curr.action !== 'beam') return;
+    // Goo blasts and streams are drawn by gooView.
+    if (this.theme.fluid || (curr.action !== 'blast' && curr.action !== 'beam')) return;
     const move = MOVES[curr.action];
     const phase = phaseAt(move, curr.actionTick, curr.moveSustained);
     if (!phase) return;
@@ -489,6 +553,29 @@ const SHIELD_FLARE_MS = 180;
 /** Fire cools from white-hot to this deep ember red as it rises off the shield. */
 const EMBER_RED = 0x7a1204;
 
+/** The holy cross shield's light, whatever the fighter's energy looks like: white-gold. */
+const HOLY_THEME: EnergyTheme = { core: 0xfffbe8, body: 0xffd970, fringe: 0xe8a93a, lightning: false, shield: 'cross' };
+/** Hologram colour fringes, offset either side of the cross's outline. */
+const HOLO_FRINGES = [
+  { color: 0x6fe8ff, dx: 2.5, alpha: 0.45 },
+  { color: 0xff8ad8, dx: -2.5, alpha: 0.3 },
+] as const;
+/**
+ * The cross, as fractions of FIGHTER_HEIGHT: a Latin cross standing at the shield's face (its
+ * upright just behind SHIELD_REACH, where blocked attacks stop), as tall as the fighter.
+ */
+const CROSS = {
+  /** Upright's centre, forward of the body; the crossing's height above the feet. */
+  x: 0.5,
+  y: 0.8,
+  /** Total height, the share of it above the crossing, arm half-span, bar half-thickness. */
+  height: 1.08,
+  above: 0.3,
+  arm: 0.22,
+  bar: 0.065,
+} as const;
+
+
 type Point = { x: number; y: number };
 
 /**
@@ -518,13 +605,18 @@ class ShieldFx {
   /** guardBrokenTick seen last frame (null until the first frame), to spot a break. */
   private lastBroken: number | null = null;
   private flareMs = 0;
+  /** Hologram glitch: ms left, and how far the image has jumped sideways. */
+  private glitchMs = 0;
+  private glitchDx = 0;
 
   constructor() {
     this.lines.blendMode = 'add';
     this.root.addChild(this.haze, this.sheet, this.lines, this.palmGlow, this.palmCore);
   }
 
-  setTheme(theme: EnergyTheme): void {
+  setTheme(energy: EnergyTheme): void {
+    // A cross shield shines with holy light, not the fighter's energy.
+    const theme = energy.shield === 'cross' ? HOLY_THEME : energy;
     this.theme = theme;
     this.haze.tint = theme.fringe;
     this.sheet.tint = theme.body;
@@ -604,9 +696,141 @@ class ShieldFx {
     this.palmCore.alpha = k;
 
     const frame: BoltFrame = { x, y: baseY, flip: f.facing, scale: 1 };
-    if (t.lightning) this.drawThunder(palm, rim, frame, world, k, flare, time, dt, particles);
+    if (t.shield === 'cross') this.drawCross(palm, open, world, k, flare, time, dt, particles);
+    else if (t.lightning) this.drawThunder(palm, rim, frame, world, k, flare, time, dt, particles);
     else this.drawFire(rim, world, f.facing, k, flare, time, dt, particles);
   }
+
+  /**
+   * A holy cross projected as a hologram: a translucent white-gold Latin cross standing at the
+   * shield's face, with a halo and slowly turning rays behind its crossing, scanlines drifting up
+   * through it, a bright scan sweeping down, colour fringes along its outline, now and then a
+   * glitch that jumps it sideways, and motes of light rising off it. It grows out of the palm as
+   * the shield is raised.
+   */
+  private drawCross(
+    palm: Point,
+    open: number,
+    world: (p: Point) => Point,
+    k: number,
+    flare: number,
+    time: number,
+    dt: number,
+    particles: Particles,
+  ): void {
+    const t = this.theme;
+    const H = FIGHTER_HEIGHT;
+    const g = this.lines;
+
+    // Hologram instability: rare glitches (more often on a weak guard or a hit), and a faint flicker.
+    this.glitchMs = Math.max(0, this.glitchMs - dt * 1000);
+    if (this.glitchMs === 0 && Math.random() < dt * (0.8 + (1 - k) * 4 + flare * 6)) {
+      this.glitchMs = 50 + Math.random() * 90;
+      this.glitchDx = (Math.random() < 0.5 ? -1 : 1) * (3 + Math.random() * 7);
+    }
+    const glitching = this.glitchMs > 0;
+    const a = Math.min(1, k * (glitching ? 0.6 : 0.9 + Math.random() * 0.1) * (1 + flare * 0.6));
+
+    // Geometry in the local frame (x forward, y down from the feet), unfolding from the palm.
+    const size = 0.25 + 0.75 * open;
+    const cx = lerp(palm.x, CROSS.x * H, open) + (glitching ? this.glitchDx : 0);
+    const cy = lerp(palm.y, -CROSS.y * H, open);
+    const tall = CROSS.height * H * size;
+    const top = cy - CROSS.above * tall;
+    const bottom = cy + (1 - CROSS.above) * tall;
+    const arm = CROSS.arm * H * size;
+    const bar = CROSS.bar * H * size;
+    const outline: Point[] = [
+      { x: cx - bar, y: top }, { x: cx + bar, y: top }, { x: cx + bar, y: cy - bar }, { x: cx + arm, y: cy - bar },
+      { x: cx + arm, y: cy + bar }, { x: cx + bar, y: cy + bar }, { x: cx + bar, y: bottom }, { x: cx - bar, y: bottom },
+      { x: cx - bar, y: cy + bar }, { x: cx - arm, y: cy + bar }, { x: cx - arm, y: cy - bar }, { x: cx - bar, y: cy - bar },
+    ];
+    const poly = (pts: Point[], dx = 0): number[] =>
+      pts.flatMap((pt) => {
+        const w = world(pt);
+        return [w.x + dx, w.y];
+      });
+    /** The cross's extent along local row `y`: the upright, or the arms at their height. */
+    const span = (y: number): [number, number] | null => {
+      if (y < top || y > bottom) return null;
+      return Math.abs(y - cy) <= bar ? [cx - arm, cx + arm] : [cx - bar, cx + bar];
+    };
+    /** Horizontal lines across the cross for each row from `y0` to `y1`, every `gap` px. */
+    const rows = (y0: number, y1: number, gap: number): void => {
+      for (let y = y0; y < y1; y += gap) {
+        const s = span(y);
+        if (!s) continue;
+        const p0 = world({ x: s[0], y });
+        const p1 = world({ x: s[1], y });
+        g.moveTo(p0.x, p0.y).lineTo(p1.x, p1.y);
+      }
+    };
+    const centre = world({ x: cx, y: cy });
+
+    // Glow: an aura around the whole cross and a column of light along the upright.
+    this.haze.position.set(centre.x, centre.y + tall * 0.15);
+    this.haze.width = arm * 4.2;
+    this.haze.height = tall * 1.5;
+    this.haze.alpha = (0.28 + 0.25 * flare) * k;
+    const mid = world({ x: cx, y: (top + bottom) / 2 });
+    this.sheet.position.set(mid.x, mid.y);
+    this.sheet.width = bar * 6;
+    this.sheet.height = tall * 1.15;
+    this.sheet.alpha = 0.35 * a;
+
+    // Rays fanning out from the crossing, slowly turning, and a halo ring around it.
+    const rays = 14;
+    const reach = H * (0.42 + 0.25 * flare) * size;
+    for (let i = 0; i < rays; i++) {
+      const ang = (i / rays) * Math.PI * 2 + time * 0.0003;
+      const len = reach * (0.75 + 0.25 * Math.sin(time * 0.002 + i * 1.7));
+      const tip = (d: number) => [centre.x + Math.cos(ang + d) * len, centre.y + Math.sin(ang + d) * len];
+      g.poly([centre.x, centre.y, ...tip(-0.045), ...tip(0.045)]).fill({ color: t.body, alpha: 0.1 * a });
+    }
+    const halo = H * 0.16 * size * (1 + 0.04 * Math.sin(time * 0.004));
+    g.circle(centre.x, centre.y, halo).stroke({ color: t.body, width: 6, alpha: 0.22 * a });
+    g.circle(centre.x, centre.y, halo).stroke({ color: t.core, width: 1.6, alpha: 0.75 * a });
+
+    // The translucent body of the cross.
+    g.poly(poly(outline)).fill({ color: t.body, alpha: 0.22 * a });
+
+    // Scanlines drifting up through it, and a bright scan band sweeping down it.
+    const gap = 4;
+    rows(top + gap - ((time * 0.02) % gap), bottom, gap);
+    g.stroke({ color: t.core, width: 1.2, alpha: 0.3 * a });
+    const sweep = top + ((time * 0.25) % (tall * 1.4)) - tall * 0.2;
+    rows(Math.max(top, sweep - 7), Math.min(bottom, sweep + 7), 1.5);
+    g.stroke({ color: t.core, width: 1.5, alpha: 0.35 * a });
+
+    // Outline: colour fringes either side, a soft gold glow, and a crisp white-gold edge.
+    for (const fringe of HOLO_FRINGES) {
+      g.poly(poly(outline, fringe.dx)).stroke({ color: fringe.color, width: 1.5, alpha: fringe.alpha * a });
+    }
+    g.poly(poly(outline)).stroke({ color: t.body, width: 8, alpha: 0.3 * a, join: 'miter' });
+    g.poly(poly(outline)).stroke({ color: t.core, width: 2.2 + flare * 1.5, alpha: a, join: 'miter' });
+
+    // Motes of holy light rising off it.
+    let n = spawnCount(28 * k * dt * (1 + flare * 2));
+    while (n-- > 0) {
+      const onArm = Math.random() < 0.3;
+      const pt = world({
+        x: onArm ? cx + (Math.random() * 2 - 1) * arm : cx + (Math.random() * 2 - 1) * bar * 1.5,
+        y: onArm ? cy + (Math.random() * 2 - 1) * bar : lerp(top, bottom, Math.random()),
+      });
+      particles.emit({
+        x: pt.x,
+        y: pt.y,
+        vx: (Math.random() - 0.5) * 20,
+        vy: -(30 + Math.random() * 60),
+        life: 0.8 + Math.random() * 0.8,
+        size: 4 + Math.random() * 5,
+        tint: Math.random() < 0.5 ? t.core : t.body,
+        alpha: 0.8,
+        ember: true,
+      });
+    }
+  }
+
 
   /**
    * Living flame: billowing puffs boil off the dome's face and the space inside it, rising and
@@ -792,7 +1016,7 @@ class ShieldFx {
         life: 0.25 + Math.random() * 0.25,
         size: 12 + Math.random() * 12,
         tint: Math.random() < 0.4 ? t.core : t.body,
-        tintEnd: t.lightning ? t.fringe : EMBER_RED,
+        tintEnd: t.lightning || t.shield === 'cross' ? t.fringe : EMBER_RED,
         grow: 2,
         alpha: 0.45,
         drag: 3.5,
@@ -844,7 +1068,7 @@ class ShieldFx {
 
   private shatter(point: (a: number) => Point, particles: Particles): void {
     const t = this.theme;
-    if (!t.lightning) {
+    if (!t.lightning && t.shield !== 'cross') {
       // Fire: the dome collapses in a gout of flame.
       for (let i = 0; i < 24; i++) {
         const p = point((Math.random() * 2 - 1) * SHIELD.sweep);
@@ -877,7 +1101,8 @@ class ShieldFx {
         size: 3 + Math.random() * 5,
         tint: Math.random() < 0.5 ? t.core : t.body,
         drag: 3,
-        gravity: t.lightning ? 0 : 500,
+        // Light (lightning, a holy cross) scatters; fire's sparks fall.
+        gravity: t.lightning || t.shield === 'cross' ? 0 : 500,
       });
     }
     const c = point(0);

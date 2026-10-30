@@ -148,7 +148,7 @@ function strike(a: Mutable<FighterState>, v: Mutable<FighterState>): void {
 
 /**
  * Supers' strikes (lava columns, lightning bolts) hitting anyone but their owner standing in them
- * (once per strike per fighter, and then not again by any strike for STRIKE_GRACE_TICKS). Returns
+ * (once per strike per fighter, and then not again by any strike for the super's grace). Returns
  * the strikes with who they have struck updated.
  */
 export function strikeHits(fighters: Mutable<FighterState>[], strikes: readonly Strike[]): Strike[] {
@@ -163,7 +163,7 @@ export function strikeHits(fighters: Mutable<FighterState>[], strikes: readonly 
       if (!overlaps(column, hurtbox(f))) return;
       // Thrown away from the column's centre.
       applyHit(f, STRIKE_HITS[s.kind], f.x >= s.x ? 1 : -1);
-      f.strikeGrace = STRIKE_GRACE_TICKS;
+      f.strikeGrace = def.grace ?? STRIKE_GRACE_TICKS;
       struck |= bit;
     });
     return struck === s.struck ? s : { ...s, struck };
@@ -200,6 +200,7 @@ function applyHit(v: Mutable<FighterState>, hit: HitDef, dir: 1 | -1): void {
   }
   if (v.action !== 'hit') setAction(v, 'hit');
   v.hitstun = Math.max(v.hitstun, hit.hitstun);
+  if (hit.trap) v.trapped = Math.max(v.trapped, hit.trap);
   v.vx = dir * hit.knockback;
   if (hit.launch) {
     v.grounded = false;
