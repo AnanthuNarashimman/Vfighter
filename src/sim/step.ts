@@ -17,6 +17,8 @@ import {
   JUMP_BUFFER_TICKS,
   JUMP_VELOCITY,
   KO_RESET_TICKS,
+  METER_MAX,
+  METER_SOLO_REGEN,
   PROJECTILE_DESPAWN_MARGIN,
   SHOVE_FRICTION,
   STAGE_MARGIN,
@@ -58,8 +60,15 @@ export function step(state: GameState, inputs: readonly InputFrame[]): GameState
     const input = state.ko ? NO_INPUT : (inputs[owner] ?? NO_INPUT);
     const opponent = state.fighters.find((_, j) => j !== owner);
     const spawn = (p: ProjectileSpawn) => spawned.push({ ...p, id: nextId++, owner, age: 0 });
-    return stepFighter(f, input, spawn, opponent?.x);
+    const channeling = state.cataclysms.some((c) => c.owner === owner);
+    const next: Mutable<FighterState> = stepFighter(f, input, spawn, opponent?.x, channeling);
+    // Alone on the stage (solo testing) there is nobody to fill the meter against.
+    const casting = isMoveId(next.action) && MOVES[next.action].cataclysm === true;
+    if (state.fighters.length === 1 && !channeling && !casting) next.meter = Math.min(METER_MAX, next.meter + METER_SOLO_REGEN);
+    return next;
   });
+  // The fight is on once anyone presses a key (characters can be switched until then).
+  const started = state.started || (!state.ko && inputs.some((i) => Object.values(i).some(Boolean)));
   const moved = state.projectiles
     .map((p) => ({ ...p, x: p.x + p.vx, age: p.age + 1 }))
     .filter((p) => p.x > -PROJECTILE_DESPAWN_MARGIN && p.x < STAGE_WIDTH + PROJECTILE_DESPAWN_MARGIN);
@@ -88,22 +97,29 @@ export function step(state: GameState, inputs: readonly InputFrame[]): GameState
     clashes,
     cataclysms: supers.cataclysms,
     strikes,
+    started,
     ko,
   };
 }
 
-/** `opponentX`, when there is an opponent, keeps the fighter turned toward them on the ground. */
+/**
+ * `opponentX`, when there is an opponent, keeps the fighter turned toward them on the ground.
+ * `channeling`: the fighter's own super is running; they hold a power stance until it ends.
+ */
 export function stepFighter(
   prev: FighterState,
-  input: InputFrame,
+  held: InputFrame,
   spawn: (p: ProjectileSpawn) => void = () => {},
   opponentX?: number,
+  channeling = false,
 ): FighterState {
   const f: Mutable<FighterState> = { ...prev };
+  // A fighter holding their super's stance takes no input (still tracked, so presses stay presses).
+  const input = channeling ? NO_INPUT : held;
   const pressed = (b: Button) => input[b] && !prev.lastInput[b];
   const dir: -1 | 0 | 1 = input.right === input.left ? 0 : input.right ? 1 : -1;
 
-  f.lastInput = input;
+  f.lastInput = held;
   f.actionTick = Math.min(prev.actionTick + 1, COUNTER_CAP);
   f.landedTick = Math.min(prev.landedTick + 1, COUNTER_CAP);
   f.jumpBuffer = pressed('jump') ? JUMP_BUFFER_TICKS : Math.max(0, prev.jumpBuffer - 1);
@@ -121,6 +137,9 @@ export function stepFighter(
     f.hitstun = Math.max(0, f.hitstun - 1);
     if (f.hitstun === 0) setAction(f, f.grounded ? 'idle' : 'air');
   }
+  // The super's stance: taken once the super move itself has played out, held while it runs.
+  if (channeling && f.action !== 'ko' && f.action !== 'channel' && !isMoveId(f.action)) setAction(f, 'channel');
+  if (!channeling && f.action === 'channel') setAction(f, f.grounded ? 'idle' : 'air');
   const stunned = f.action === 'hit' || f.action === 'ko';
 
   if (isMoveId(f.action)) {
@@ -133,11 +152,11 @@ export function stepFighter(
     if (f.actionTick === sustainEndTick(move, f.moveSustained) && (holding || extending)) {
       f.moveSustained++;
     }
-    // A finished move hands control back.
-    if (phaseAt(move, f.actionTick, f.moveSustained) === null) setAction(f, f.grounded ? 'idle' : 'air');
+    // A finished move hands control back (or, after a super, goes straight into its stance).
+    if (phaseAt(move, f.actionTick, f.moveSustained) === null) setAction(f, channeling ? 'channel' : f.grounded ? 'idle' : 'air');
   }
 
-  if (!isMoveId(f.action) && !stunned) {
+  if (!isMoveId(f.action) && !stunned && f.action !== 'channel') {
     for (const id of MOVE_PRIORITY) {
       if (pressed(MOVES[id].button) && tryStartMove(f, id)) break;
     }
@@ -146,6 +165,9 @@ export function stepFighter(
   if (stunned) {
     // Knocked back: no control; a ground slide eases off, an airborne body keeps its arc.
     if (f.grounded) f.vx *= HIT_FRICTION;
+  } else if (f.action === 'channel') {
+    // Rooted to the spot in the super's stance.
+    f.vx = 0;
   } else if (isMoveId(f.action)) {
     // Committed: no steering. On the ground the fighter is planted; in the air momentum carries.
     if (f.grounded) f.vx = 0;
@@ -234,6 +256,8 @@ function tryStartMove(f: Mutable<FighterState>, id: MoveId): boolean {
   if (!f.grounded && !move.allowedInAir) return false;
   const cost = move.energyCost ?? 0;
   if (f.energy < cost + (move.drainPerTick ?? 0)) return false;
+  if (move.meterCost && f.meter < move.meterCost) return false;
+  if (move.meterCost) f.meter -= move.meterCost;
   spendEnergy(f, cost);
   setAction(f, id);
   return true;
@@ -252,5 +276,5 @@ function land(f: Mutable<FighterState>): void {
   f.grounded = true;
   f.landedTick = 0;
   // Air attacks end on landing, like most fighting games. Hitstun and KO carry on.
-  if (f.action !== 'hit' && f.action !== 'ko') setAction(f, 'idle');
+  if (f.action !== 'hit' && f.action !== 'ko' && f.action !== 'channel') setAction(f, 'idle');
 }

@@ -64,6 +64,9 @@ export function frameFor(f: FighterState): FrameName {
       return 'hit_recoil';
     case 'block':
       return 'block';
+    case 'channel':
+      // Holding the super: head back, arms flung out (Gooner's own pose; others use their blast release).
+      return 'beam_release';
     case 'crouch':
       return 'duck';
     case 'air':

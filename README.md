@@ -9,37 +9,45 @@ npm run dev        # http://localhost:5173
 
 Two players on one keyboard:
 
-| | move | jump | duck (hold) | kick | blast | beam (hold) | block (hold) | super | switch fighter |
+| | move | jump | duck (hold) | kick | blast | beam (hold) | block (hold) | super | pick fighter |
 |---|---|---|---|---|---|---|---|---|---|
 | P1 | A / D | W, Space | S | K | J | L | I | O | C |
 | P2 | ← / → | ↑ | ↓ | `.` (Num2) | `,` (Num1) | `/` (Num3) | Right Shift (Num0) | Enter | M |
 
-**Supers** need a full energy gauge (and spend it all); a hit during the wind-up cancels them
-(the energy is still spent). Each runs for 9 seconds, striking at random spots, about half the
-time near the opponent. Shields can't stop the strikes, but each one is telegraphed, and the
-caster is never hurt by their own.
+**Supers** need a full **super meter**, a separate bar under the guard. It starts empty each round
+and fills only from fighting: mostly from damage you deal (and guard you knock off a shield), a
+little from damage you take; never on its own, and not while your super runs. A super spends all
+of it; a hit during the wind-up cancels it (the meter is still spent). Once it lands the caster
+holds a power stance until it ends: rooted, taking no input, and immune to everything (hits are
+absorbed). Each runs for 9 seconds, striking at random spots, about half the time near the
+opponent. Shields can't stop the strikes, but each one is telegraphed, and the caster is never hurt
+by their own. Against an opponent who keeps running: Inferno and Tempest ~180, Goon Fall ~195.
 
-- **Inferno** (FLASH, fire): the stage burns. Each eruption glows and smokes as a crack for ~0.7s,
-  then a lava column blasts up, launching anyone in it for heavy damage.
+Damage is kept low so fights last: a clean kick 42, a blast 52, of 1000 health.
+
+- **Inferno** (FLASH, fire): the stage burns. Each eruption glows and smokes as a crack for only
+  ~0.4s, most of them right by the opponent, then a lava column blasts up, launching anyone in it.
 - **Tempest** (VOLT, thunder): the sky goes dark with storm clouds and rain. Each strike gathers as
-  static on the ground for ~0.5s, then lightning slams down, electrocuting anyone there (a little
-  less damage, a longer stun). Strikes come more often than eruptions.
+  static on the ground for ~0.5s, then lightning slams down, electrocuting anyone there (a longer
+  stun). The storm hunts its target: most bolts strike close to the opponent. Strikes come more
+  often than eruptions.
 - **Goon Fall** (GOONER, goo), the strongest super: a ~2s entrance first (night falls, a colossus of
   goo in Gooner's image heaves up out of the valley facing you, arms spread and palms open, its eyes
   ignite red, it roars), then goo balls rain down for ~9s
   while it looms over everything. Each is targeted for ~0.37s (a pillar of light, a closing reticle,
-  its shadow) while it plunges ever faster, then hits like a bomb. Hits are lighter than an eruption
-  but far more frequent (short grace) and trap: glued in place for ~0.75s, then slowed for ~0.9s
-  (`TRAP` in `sim/constants.ts`), so the next ball is hard to escape. When it ends the colossus
+  its shadow) while it plunges ever faster, then hits like a bomb and traps: glued in place for
+  ~0.4s, then slowed for ~0.7s (`TRAP` in `sim/constants.ts`). A trapped fighter isn't aimed at and
+  can't be hit again until the goo lets go, so they always get to move away. When it ends the colossus
   melts back into the valley. Nothing covers the play area, and the name is never shown.
 
 Ducking slips under blasts and beams but kicks still land. Blocking raises a shield that stops
 everything but drains the guard meter (blocked hits, and slowly just holding it); an empty guard
 breaks and leaves you stunned, and the shield can't go back up until the guard refills past the notch.
 
-Switch characters any time, even mid-fight: C cycles P1 (FLASH, VOLT, GOONER), M cycles P2. The
-picks are kept in the URL (`?p1=maroon&p2=navy`, also `gooner`), so a reload keeps them. H toggles
-the controls strip.
+Pick characters before the fight: C cycles P1 (FLASH, VOLT, GOONER), M cycles P2. Once anyone
+presses a fight key the picks are locked until the next round. They are kept in the URL
+(`?p1=maroon&p2=navy`, also `gooner`), so a reload keeps them. In solo testing the super meter
+refills on its own. H toggles the controls strip.
 
 **GOONER** fights with fluid instead of energy (`render/gooView.ts`): his blast is a jiggling ball of
 sticky white goo, and his beam a powerful straight jet poured from his forward palm (his own two

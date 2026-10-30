@@ -57,7 +57,8 @@ export function stepCataclysms(
       const target = fighters.find((_, j) => j !== c.owner);
       const lo = STAGE_MARGIN * 0.5;
       const hi = STAGE_WIDTH - STAGE_MARGIN * 0.5;
-      const x = target && random() < def.aim ? target.x + (random() * 2 - 1) * def.aimSpread : lo + random() * (hi - lo);
+      const aimable = target && !(def.spareTrapped && target.trapped > 0);
+      const x = aimable && random() < def.aim ? target.x + (random() * 2 - 1) * def.aimSpread : lo + random() * (hi - lo);
       aged.push({ id: nextId++, owner: c.owner, kind: c.kind, x: Math.min(hi, Math.max(lo, x)), age: 0, struck: 0 });
       wait = def.interval.min + Math.floor(random() * (def.interval.max - def.interval.min + 1));
     }

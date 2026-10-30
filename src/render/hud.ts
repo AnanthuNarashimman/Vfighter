@@ -1,5 +1,5 @@
 import { Container, Graphics, Text, type Ticker } from 'pixi.js';
-import { CATACLYSMS, ENERGY_MAX, GUARD_MAX, GUARD_RAISE_MIN, HEALTH_MAX } from '../sim/constants';
+import { CATACLYSMS, ENERGY_MAX, GUARD_MAX, GUARD_RAISE_MIN, HEALTH_MAX, METER_MAX } from '../sim/constants';
 import { MOVES, kitHasMove } from '../sim/moves';
 import type { Element, Kit, MoveId } from '../sim/moves';
 import type { FighterState, GameState } from '../sim/state';
@@ -33,6 +33,10 @@ const HEALTH_BAR: BarShape = { x: 16, y: 28, width: 330, height: 13, slant: 8 };
 const BAR: BarShape = { x: 16, y: 49, width: 170, height: 7, slant: 5 };
 /** Guard: a hairline under the energy gauge. */
 const GUARD_BAR: BarShape = { x: 16, y: 61, width: 170, height: 4, slant: 3 };
+/** Super meter: its own bar under the rest, in the colours of the fighter's super. */
+const METER_BAR: BarShape = { x: 16, y: 71, width: 240, height: 8, slant: 5 };
+/** The super meter is split into this many segments, so progress reads at a glance. */
+const METER_SEGMENTS = 4;
 const GUARD_COLORS = { fill: 0xdfe8f2, low: 0xd8402a, trough: 0x1a1d22 } as const;
 /** Player tag and name sit above the health bar, starting here from the screen edge. */
 const TAG_X = HEALTH_BAR.x + HEALTH_BAR.slant;
@@ -60,11 +64,11 @@ type ControlHint = readonly [keys: readonly string[], label: string, move?: Move
 const CONTROLS: readonly (readonly ControlHint[])[] = [
   [
     [['A', 'D'], 'move'], [['W'], 'jump'], [['S'], 'duck'], [['K'], 'kick'], [['J'], 'blast', 'blast'],
-    [['L'], 'beam', 'beam'], [['I'], 'block'], [['O'], 'super', 'super'], [['C'], 'switch fighter'],
+    [['L'], 'beam', 'beam'], [['I'], 'block'], [['O'], 'super', 'super'], [['C'], 'pick fighter'],
   ],
   [
     [['←', '→'], 'move'], [['↑'], 'jump'], [['↓'], 'duck'], [['.'], 'kick'], [[','], 'blast', 'blast'],
-    [['/'], 'beam', 'beam'], [['R-Shift'], 'block'], [['Enter'], 'super', 'super'], [['M'], 'switch fighter'],
+    [['/'], 'beam', 'beam'], [['R-Shift'], 'block'], [['Enter'], 'super', 'super'], [['M'], 'pick fighter'],
   ],
 ];
 /** Each player's super key, for the SUPER READY tag. */
@@ -232,6 +236,8 @@ class PlayerPanel {
   private readonly healthBar = new Graphics();
   private readonly gauge = new Graphics();
   private readonly guardBar = new Graphics();
+  private readonly meterBar = new Graphics();
+  private shownMeter = 0;
   private readonly tagBg = new Graphics();
   private palette: HudPalette = CHARACTERS[0].hud;
   private shownEnergy = ENERGY_MAX;
@@ -250,6 +256,7 @@ class PlayerPanel {
     this.healthBar.scale.x = side;
     this.gauge.scale.x = side;
     this.guardBar.scale.x = side;
+    this.meterBar.scale.x = side;
 
     const tag = new Container();
     const tagText = new Text({ text: `P${player + 1}`, style: { ...TITLE_STYLE, fontSize: 10, fill: 0x1a1008 } });
@@ -261,17 +268,17 @@ class PlayerPanel {
     this.name.anchor.set(side > 0 ? 0 : 1, 0);
     this.name.position.set(side * NAME_X, 8);
 
-    // Beside the energy gauge, toward the centre: SUPER READY, or the Inferno's countdown.
+    // Beside the super meter, toward the centre: SUPER READY, or the running super's countdown.
     this.superReadyText = `SUPER READY · ${SUPER_KEYS[player]}`;
     this.superTag = new Text({
       text: this.superReadyText,
       style: { ...TITLE_STYLE, fontSize: 11, stroke: { color: 0x000000, width: 3 } },
     });
     this.superTag.anchor.set(side > 0 ? 0 : 1, 0);
-    this.superTag.position.set(side * (BAR.x + BAR.width + 18), BAR.y - 5);
+    this.superTag.position.set(side * (METER_BAR.x + METER_BAR.width + 16), METER_BAR.y - 4);
     this.superBar.scale.x = side;
 
-    this.root.addChild(this.healthBar, this.gauge, this.guardBar, this.superBar, tag, this.name, this.superTag);
+    this.root.addChild(this.healthBar, this.gauge, this.guardBar, this.meterBar, this.superBar, tag, this.name, this.superTag);
   }
 
   setCharacter(character: CharacterDef): void {
@@ -283,11 +290,15 @@ class PlayerPanel {
   /** `superLeft`: share of this player's super (cataclysm) still to run, or null if none is. */
   update(f: FighterState, deltaMs: number, time: number, superLeft: number | null): void {
     const dt = deltaMs / 1000;
-    // Without energy moves the gauge means nothing; without a super, neither does a full gauge.
+    // Without energy moves the gauge means nothing; without a super, neither does the meter.
     this.gauge.visible = kitHasMove(f.kit, 'blast');
     const hasSuper = kitHasMove(f.kit, 'super');
-    this.superTag.visible = this.superBar.visible = hasSuper;
-    if (hasSuper) this.drawSuper(f, superLeft, time);
+    this.superTag.visible = this.superBar.visible = this.meterBar.visible = hasSuper;
+    if (hasSuper) {
+      this.drawSuper(f, superLeft, time);
+      this.shownMeter += (f.meter - this.shownMeter) * Math.min(1, dt * 10);
+      this.drawMeter(f, time);
+    }
     // The fill tracks energy closely; a pale ghost lingers where it was so spending reads clearly.
     this.shownEnergy += (f.energy - this.shownEnergy) * Math.min(1, dt * 20);
     this.ghostEnergy = f.energy >= this.ghostEnergy ? f.energy : Math.max(f.energy, this.ghostEnergy - GHOST_SPEED * dt);
@@ -316,19 +327,50 @@ class PlayerPanel {
       this.superTag.visible = look.name !== null;
       if (look.name !== null) this.superTag.text = look.name;
       this.superTag.alpha = 0.85 + 0.15 * Math.sin(time * 0.02);
-      const x = BAR.x + BAR.width + 18;
+      const x = METER_BAR.x + METER_BAR.width + 16;
       const w = 96;
-      const y = BAR.y + 11;
+      // Under the name when there is one, else level with the meter.
+      const y = METER_BAR.y + (look.name !== null ? 12 : 2);
       g.rect(x - 1, y - 1, w + 2, 6).fill({ color: 0x000000, alpha: 0.6 });
       g.rect(x, y, w, 4).fill(look.trough);
       g.rect(x, y, w * superLeft, 4).fill(look.bar);
       return;
     }
-    const ready = f.energy >= ENERGY_MAX;
+    const ready = f.meter >= METER_MAX;
     this.superTag.visible = ready;
     if (!ready) return;
     this.superTag.text = this.superReadyText;
     this.superTag.alpha = 0.55 + 0.45 * Math.abs(Math.sin(time * 0.005));
+  }
+
+  /**
+   * The super meter: fills from fighting, split into segments, in the colours of the fighter's
+   * super. Full, it shines and pulses: the super is ready.
+   */
+  private drawMeter(f: FighterState, time: number): void {
+    const look = SUPER_LOOK[f.element];
+    const { width, height } = METER_BAR;
+    const strip = slantStrip(METER_BAR);
+    const full = f.meter >= METER_MAX;
+    const fill = (Math.max(0, Math.min(METER_MAX, this.shownMeter)) / METER_MAX) * width;
+    const g = this.meterBar.clear();
+    g.poly(strip(-3, width + 3, -3, height + 3)).fill({ color: 0x000000, alpha: 0.65 });
+    g.poly(strip(0, width)).fill(look.trough);
+    if (fill > 0) {
+      g.poly(strip(0, fill)).fill({ color: look.bar, alpha: full ? 1 : 0.8 });
+      g.poly(strip(0, fill, 0, height * 0.4)).fill({ color: 0xffffff, alpha: full ? 0.5 : 0.25 });
+    }
+    if (full) {
+      // A highlight sweeping along the full bar, and the frame pulsing.
+      const sweep = ((time * 0.4) % (width + 60)) - 30;
+      g.poly(strip(Math.max(0, sweep - 18), Math.min(width, sweep + 18))).fill({ color: 0xffffff, alpha: 0.45 });
+      const pulse = 0.45 + 0.35 * Math.sin(time * 0.01);
+      g.poly(strip(-3, width + 3, -3, height + 3)).stroke({ color: look.label, alpha: pulse, width: 2 });
+    }
+    for (let i = 1; i < METER_SEGMENTS; i++) {
+      const px = (width * i) / METER_SEGMENTS;
+      g.poly(strip(px - 1, px + 1)).fill({ color: 0x000000, alpha: 0.7 });
+    }
   }
 
   /** Red while too low to raise the shield; brighter while the shield is up. */

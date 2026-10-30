@@ -1,4 +1,4 @@
-import { TRAP } from './constants';
+import { METER_MAX, TRAP } from './constants';
 import type { Button } from './input';
 
 /** A fighter's element decides which super it has. */
@@ -31,6 +31,8 @@ export interface MoveDef {
   readonly activeDrift?: number;
   /** Energy paid up front; the move cannot start without it. */
   readonly energyCost?: number;
+  /** Super meter paid up front (all of it, for a super); the move cannot start without it. */
+  readonly meterCost?: number;
   /** Energy drained per tick of the active phase. */
   readonly drainPerTick?: number;
   /** Fires a projectile from the muzzle on the first active tick. */
@@ -71,14 +73,14 @@ export interface HitDef {
 
 /**
  * What a cataclysm's strike does. Both come from where a shield can't face. A lava column bursting
- * up under the opponent: heavy, and launches. A lightning bolt from above: a little lighter, but
- * the shock locks them up longer and only jolts them off their feet.
+ * up under the opponent: heavy, and launches. A lightning bolt from above: as heavy, and the shock
+ * locks them up longer, but it only jolts them off their feet.
  */
 export const STRIKE_HITS: Readonly<Record<Element, HitDef>> = {
-  fire: { damage: 62, guardDamage: 0, hitstun: 30, knockback: 5, launch: 12, unblockable: true },
-  thunder: { damage: 56, guardDamage: 0, hitstun: 40, knockback: 3, launch: 5, unblockable: true },
-  // A goo ball from above: a light splat that doesn't knock anyone away; it glues them down instead.
-  goo: { damage: 24, guardDamage: 0, hitstun: 10, knockback: 0, unblockable: true, trap: TRAP.ticks },
+  fire: { damage: 40, guardDamage: 0, hitstun: 30, knockback: 5, launch: 12, unblockable: true },
+  thunder: { damage: 44, guardDamage: 0, hitstun: 40, knockback: 3, launch: 5, unblockable: true },
+  // A goo ball from above: doesn't knock anyone away; it glues them down instead (see TRAP).
+  goo: { damage: 38, guardDamage: 0, hitstun: 10, knockback: 0, unblockable: true, trap: TRAP.ticks },
 };
 
 const MOVE_TABLE = {
@@ -93,7 +95,7 @@ const MOVE_TABLE = {
     lunge: [5, 4, 3, 2, 1],
     // The high kick reaches out at chest-to-head height (measured from the kick_high frame).
     // Hitstun is short enough that the victim recovers before a repeated kick can land again.
-    hit: { damage: 65, guardDamage: 18, hitstun: 14, knockback: 7, hitbox: { x0: 0.1, x1: 0.62, y0: 0.45, y1: 0.95 } },
+    hit: { damage: 42, guardDamage: 18, hitstun: 14, knockback: 7, hitbox: { x0: 0.1, x1: 0.62, y0: 0.45, y1: 0.95 } },
   },
   blast: {
     button: 'blast',
@@ -106,7 +108,7 @@ const MOVE_TABLE = {
     energyCost: 25,
     lunge: [-4, -3, -2, -1],
     projectile: { speed: 16 },
-    hit: { damage: 80, guardDamage: 26, hitstun: 22, knockback: 8 },
+    hit: { damage: 52, guardDamage: 26, hitstun: 22, knockback: 8 },
   },
   beam: {
     button: 'beam',
@@ -120,9 +122,9 @@ const MOVE_TABLE = {
     drainPerTick: 0.75,
     activeDrift: -0.25,
     beam: { growPerTick: 48 },
-    // Per tick of contact; holding a full gauge's worth on someone takes about a quarter of their
+    // Per tick of contact; holding a full gauge's worth on someone takes about a sixth of their
     // health. Against a shield it grinds the guard down in about 1.5 seconds: a beam breaks a turtle.
-    hit: { damage: 2, guardDamage: 1.1, hitstun: 10, knockback: 2.5 },
+    hit: { damage: 1.3, guardDamage: 1.1, hitstun: 10, knockback: 2.5 },
   },
   // Fire's super, Inferno: gather the heat (interruptible), then thrust it into the ground to wake the volcano.
   super: {
@@ -133,7 +135,7 @@ const MOVE_TABLE = {
       { phase: 'recovery', ticks: 22 },
     ],
     allowedInAir: false,
-    energyCost: 100,
+    meterCost: METER_MAX,
     element: 'fire',
     cataclysm: true,
   },
@@ -146,7 +148,7 @@ const MOVE_TABLE = {
       { phase: 'recovery', ticks: 22 },
     ],
     allowedInAir: false,
-    energyCost: 100,
+    meterCost: METER_MAX,
     element: 'thunder',
     cataclysm: true,
   },
@@ -160,7 +162,7 @@ const MOVE_TABLE = {
       { phase: 'recovery', ticks: 24 },
     ],
     allowedInAir: false,
-    energyCost: 100,
+    meterCost: METER_MAX,
     element: 'goo',
     cataclysm: true,
   },

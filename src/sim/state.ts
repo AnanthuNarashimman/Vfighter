@@ -4,9 +4,10 @@ import { COUNTER_CAP, ENERGY_MAX, GUARD_MAX, HEALTH_MAX, STAGE_WIDTH } from './c
 
 /**
  * What the fighter is doing. Moves (kick, blast, beam...) are actions too. `crouch` and `block`
- * last while their button is held; `hit` = in hitstun, `ko` = knocked out for the rest of the round.
+ * last while their button is held; `hit` = in hitstun, `ko` = knocked out for the rest of the round;
+ * `channel` = holding a power stance while their own super runs (no control, can't be hurt).
  */
-export type Action = 'idle' | 'walk' | 'air' | 'crouch' | 'block' | 'hit' | 'ko' | MoveId;
+export type Action = 'idle' | 'walk' | 'air' | 'crouch' | 'block' | 'hit' | 'ko' | 'channel' | MoveId;
 
 /** The gameplay side of a character (its look is the renderer's business). */
 export interface Loadout {
@@ -42,6 +43,8 @@ export interface FighterState extends Loadout {
   /** Remaining ticks of a buffered jump press. */
   readonly jumpBuffer: number;
   readonly energy: number;
+  /** Super meter, 0..METER_MAX: fills from fighting (see METER_GAIN); a super spends all of it. */
+  readonly meter: number;
   /** Ticks since energy was last spent (regeneration waits for ENERGY_REGEN_DELAY). */
   readonly energyIdleTicks: number;
   readonly health: number;
@@ -133,6 +136,8 @@ export interface GameState {
   /** At most one per fighter. */
   readonly cataclysms: readonly Cataclysm[];
   readonly strikes: readonly Strike[];
+  /** Someone has pressed a fight key this round (until then, characters may still be switched). */
+  readonly started: boolean;
   /** Set once the round has been decided; the round restarts KO_RESET_TICKS later. */
   readonly ko: KnockOut | null;
 }
@@ -170,6 +175,7 @@ export function createFighter(x: number, facing: 1 | -1, loadout: Loadout = DEFA
     landedTick: COUNTER_CAP,
     jumpBuffer: 0,
     energy: ENERGY_MAX,
+    meter: 0,
     energyIdleTicks: COUNTER_CAP,
     health: HEALTH_MAX,
     guard: GUARD_MAX,
@@ -208,6 +214,7 @@ export function createInitialState(
     clashes: [],
     cataclysms: [],
     strikes: [],
+    started: false,
     ko: null,
   };
 }
