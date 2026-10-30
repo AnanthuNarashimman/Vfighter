@@ -1,6 +1,6 @@
 import { Container, Sprite, Texture, type Spritesheet } from 'pixi.js';
 import type { FighterState } from '../sim/state';
-import { frameFor, type FrameName } from './animations';
+import { FRAME_FALLBACK, frameFor } from './animations';
 import { FIGHTER_HEIGHT, FLOOR_Y } from './layout';
 
 /** Extra metadata written by the sprite pipeline into the atlas JSON. */
@@ -88,7 +88,8 @@ export class FighterView {
     this.sprite.tint = this.flashMs > 0 ? HIT_FLASH_TINT : this.ambient;
     if (this.flashMs > 0) x += (Math.random() - 0.5) * 2 * HIT_SHAKE_PX * (this.flashMs / HIT_FLASH_MS);
 
-    const tex = this.textures[frameFor(curr) satisfies FrameName];
+    const frame = frameFor(curr);
+    const tex = this.textures[frame] ?? this.textures[FRAME_FALLBACK[frame] ?? 'idle_stance'];
     if (this.sprite.texture !== tex) {
       this.sprite.texture = tex;
       this.castShadow.texture = tex;

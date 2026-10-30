@@ -31,6 +31,12 @@ export const GOO_ALPHA = 0.95;
 
 /** Where the cupped hands hold the goo in the charge pose (like energyView's CHARGE_POINT). */
 const CHARGE_POINT = { x: 0.27, y: 0.66 } as const;
+/**
+ * Where the stream leaves him: the forward open palm of his beam_release frame (fractions of
+ * FIGHTER_HEIGHT, measured). The beam hits along the shared MUZZLE line like everyone's (so ducking
+ * still dodges it); the stream settles onto that line by the time it reaches MUZZLE.x.
+ */
+const STREAM_HAND = { x: 0.13, y: 0.635 } as const;
 /** Muzzle flash length after a blast is released, in ticks. */
 const FLASH_TICKS = MOVES.blast.phases[1].ticks;
 
@@ -260,7 +266,8 @@ export class GooFighterFx {
     const t = phase.tick + alpha;
 
     if (phase.phase === 'startup') {
-      this.charge(at(CHARGE_POINT), t / move.phases[0].ticks, time, dt);
+      // The stream is gathered with the hands together and shows nothing until it pours.
+      if (curr.action !== 'beam') this.charge(at(CHARGE_POINT), t / move.phases[0].ticks, time, dt);
     } else if (curr.action === 'goonFall') {
       // The goo leaves the hands to raise the colossus (see colossusView.ts).
       return;
@@ -270,7 +277,9 @@ export class GooFighterFx {
       // Recovery: the stream has been cut off at the hand; `cut` runs 0 -> 1 as the tail flies away.
       const cut = active ? 0 : Math.min(1, t / move.phases[2].ticks);
       const ramp = active && curr.actionTick - move.phases[0].ticks < 4 ? Math.min(1, (t + 1) / 4) : 1;
-      this.stream(at(MUZZLE), curr.facing, len, ramp, cut, curr.beamBlocked, time, dt, firing && !active);
+      const hand = at(STREAM_HAND);
+      const lead = (MUZZLE.x - STREAM_HAND.x) * FIGHTER_HEIGHT;
+      this.stream(hand, at(MUZZLE).y - hand.y, lead, curr.facing, len + lead, ramp, cut, curr.beamBlocked, time, dt, firing && !active);
       this.wasFiring = active;
     } else if (phase.phase === 'active') {
       // The last of the ball's goo left on the palm, shrinking back.
@@ -301,12 +310,15 @@ export class GooFighterFx {
   }
 
   /**
-   * The stream, in a local frame (x forward from the hand) mapped to the world by `facing`.
+   * The stream, in a local frame (x forward from the hand `p`) mapped to the world by `facing`.
+   * It reaches the beam's line `rise` px below the hand after `lead` px; `len` is its whole length.
    * `ramp`: the jet still opening up (0..1). `cut`: 0 while flowing; once the flow stops the
    * stream detaches from the hand and its tail end chases the head away.
    */
   private stream(
     p: Point,
+    rise: number,
+    lead: number,
     facing: 1 | -1,
     len: number,
     ramp: number,
@@ -329,8 +341,14 @@ export class GooFighterFx {
       const pulse = 1 + 0.035 * Math.sin(u * 0.05 - flow * 0.05);
       return swell * pulse * ramp * thin;
     };
-    /** Centre line: dead straight (a forceful jet doesn't wander). */
-    const mid = (_u: number): number => 0;
+    /**
+     * Centre line: from the hand it eases onto the beam's line over the first `lead` px, then runs
+     * dead straight (a forceful jet doesn't wander).
+     */
+    const mid = (u: number): number => {
+      const k = Math.min(1, u / lead);
+      return rise * k * k * (3 - 2 * k);
+    };
 
     if (justStopped) {
       // The cut-off stream necks and breaks into a line of drops.

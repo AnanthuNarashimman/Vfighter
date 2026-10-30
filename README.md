@@ -42,7 +42,8 @@ picks are kept in the URL (`?p1=maroon&p2=navy`, also `gooner`), so a reload kee
 the controls strip.
 
 **GOONER** fights with fluid instead of energy (`render/gooView.ts`): his blast is a jiggling ball of
-sticky white goo, and his beam a powerful straight jet that
+sticky white goo, and his beam a powerful straight jet poured from his forward palm (his own two
+stream poses: gathering it hands together, then arched back with arms out) that
 sprays where it hits; goo lands as puddles and hit fighters drip for a while. His shield is a holy
 holographic cross (white-gold, scanlines, halo and rays, the odd glitch). His super is Goon Fall
 (`render/colossusView.ts`). The **Test GOONER solo** button at the top (or `?solo=gooner`) puts him
@@ -61,7 +62,9 @@ reads `images/` (never modified) and writes `public/assets/`:
   the shared defense-poses sheet and rescaled to match (block is matched to `punch_windup`).
 - `fighters/navy.*` likewise; `fighters/gooner.*` from the heavyset sheet, with block, duck and skid
   from his own pose sheet (rows of 2 and 1 figures). His purple sash is close to the magenta key, so
-  his sheets keep more of that hue on bluish pixels (`SPILL_TOLERANCE_AWAY` in the script).
+  his sheets keep more of that hue on bluish pixels (`SPILL_TOLERANCE_AWAY` in the script). He also
+  has `beam_charge` and `beam_release` from his stream pose sheet; characters without them show their
+  blast poses instead (`FRAME_FALLBACK` in `render/animations.ts`). Atlases may be up to 4096px.
 - `stages/valley.png`: the background.
 - `supers/colossus.png` + `.json`: Goon Fall's colossus (`giants` in the script's `CONFIG`), cut from
   the open-armed statue reference and recoloured to the game's goo palette from its own shading,
