@@ -4,7 +4,7 @@ import type { Element, Kit } from '../sim/moves';
  * Playable characters. Mostly cosmetic: the simulation only sees each one's element (its super)
  * and kit (which moves it has), both patched in live, so switching mid-match is safe.
  */
-export type EnergyStyle = 'fire' | 'thunder' | 'goo';
+export type EnergyStyle = 'fire' | 'thunder' | 'goo' | 'sound';
 
 /** Energy gauge colours. */
 export interface HudPalette {
@@ -29,6 +29,8 @@ export interface CharacterDef {
   readonly element: Element;
   readonly kit: Kit;
   readonly hud: HudPalette;
+  /** Still being built: only offered in solo testing, not in versus. */
+  readonly soloOnly?: boolean;
 }
 
 export const CHARACTERS: readonly CharacterDef[] = [
@@ -60,5 +62,17 @@ export const CHARACTERS: readonly CharacterDef[] = [
     element: 'goo',
     kit: 'full',
     hud: { fill: 0xf3f0e6, dim: 0x8e8875, hot: 0xffffff, trough: 0x1e1c18 },
+  },
+  {
+    // Squirrel-tailed brawler who fights with sound: a humming ball of it and a loud, widening beam
+    // (see soundView.ts). He shields behind his curled-up tail. His super, Nutmare, sends the
+    // opponent into a dream full of squirrels (dream.ts, dreamView.ts).
+    id: 'tkurii',
+    name: 'TKURII',
+    sheet: 'fighters/tkurii.json',
+    energy: 'sound',
+    element: 'mind',
+    kit: 'full',
+    hud: { fill: 0xe0832f, dim: 0x8a4a1c, hot: 0xffe6c4, trough: 0x24150b },
   },
 ];

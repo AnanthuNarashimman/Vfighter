@@ -18,7 +18,8 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 /**
  * Extra poses drawn on their own sheet, at a different size from the main sheets. `cells` picks
  * figures (reading order) for each frame name; the figures are rescaled so that `match[0]` (a cell
- * frame) comes out the same height as `match[1]` (a main-sheet frame of a similar pose).
+ * frame, or a figure's index for one only used for the scale) comes out the same height as
+ * `match[1]` (a main-sheet frame of a similar pose). A sheet with no comparable pose gives `scale`.
  */
 const DEFENSE_SHEET = {
   sheet: 'images/Martial Artists in Dynamic Combat Poses.png',
@@ -129,6 +130,55 @@ const CONFIG = {
         },
       ],
     },
+    {
+      id: 'tkurii',
+      sheet: 'images/Squirrel-Tailed Warrior Sprite Sheet.png',
+      rows: 3,
+      cols: 4,
+      // Same pose layout as the maroon sheet.
+      frames: [
+        'idle_stance', 'idle_breathe', 'walk_1', 'walk_2',
+        'punch_windup', 'punch_extend', 'kick_windup', 'kick_high',
+        'blast_charge', 'blast_release', 'jump_air', 'hit_recoil',
+      ],
+      standingFrame: 'idle_stance',
+      anchorNudge: {},
+      extras: [
+        // Duck and slide. The sheet's first pose (palms out) is not used, but all three are drawn at one
+        // size and it stands in the same wide stance as the punch wind-up, so it sets the scale.
+        {
+          sheet: 'images/Three Dynamic Squirrel-Tailed Warrior Poses.png',
+          rows: 2,
+          cols: [2, 1],
+          match: [0, 'punch_windup'],
+          cells: { duck: 1, skid: 2 },
+        },
+        // His shield: hunched behind his tail, curled up in front of him. The tail towers over his head,
+        // so neither height nor area compares with a main-sheet pose; the scale is set by eye (his
+        // boots and head come out the size they are in the main sheet).
+        {
+          sheet: 'images/Squirrel-Tailed Fighter’s Shield Stance.png',
+          rows: 1,
+          cols: 1,
+          scale: 0.31,
+          cells: { block: 0 },
+        },
+      ],
+    },
+  ],
+  // Small fighters that are not playable: built like fighters, into critters/.
+  critters: [
+    {
+      // The squirrels of TKURII's dream (Nutmare). Reading order: peeking out of a dirt mound,
+      // bursting out of it, running (two strides), fists up, punching, diving, knocked dizzy.
+      id: 'squirrel',
+      sheet: 'images/Squirrel Fighter Sprite Sheet.png',
+      rows: 2,
+      cols: 4,
+      frames: ['burrow', 'burst', 'run_1', 'run_2', 'stance', 'punch', 'dive', 'dizzy'],
+      standingFrame: 'stance',
+      anchorNudge: {},
+    },
   ],
   stages: [{ id: 'valley', image: 'images/Serene Fantasy Valley Panorama.png' }],
   // Giants of goo for supers (see buildGiant). The source is a fighter's frame (`fighter` + `frame`)
@@ -166,15 +216,16 @@ const scriptMtime = fs.statSync(fileURLToPath(import.meta.url)).mtimeMs;
 const keyedCache = new Map();
 
 for (const fighter of CONFIG.fighters) buildFighter(fighter);
+for (const critter of CONFIG.critters) buildFighter(critter, 'critters');
 for (const stage of CONFIG.stages) copyStage(stage);
 for (const giant of CONFIG.giants) buildGiant(giant);
 
 // ---------------------------------------------------------------------------
 
-function buildFighter(cfg) {
+function buildFighter(cfg, subDir = 'fighters') {
   const extras = cfg.extras ?? [];
   const inputs = [cfg.sheet, ...extras.map((e) => e.sheet)].map((s) => path.join(ROOT, s));
-  const outDir = path.join(ROOT, CONFIG.outDir, 'fighters');
+  const outDir = path.join(ROOT, CONFIG.outDir, subDir);
   const outPng = path.join(outDir, `${cfg.id}.png`);
   const outJson = path.join(outDir, `${cfg.id}.json`);
   if (ifStale && isFresh([outPng, outJson], inputs)) {
@@ -196,13 +247,16 @@ function buildFighter(cfg) {
   for (const extra of extras) {
     const sheet = keyedSheet(extra.sheet);
     const cells = findFigures(sheet, extra.rows, extra.cols);
-    const [cellFrame, mainFrame] = extra.match;
-    const ref = mainBoxes[cfg.frames.indexOf(mainFrame)];
-    const cellBox = cells[extra.cells[cellFrame]];
-    const scale =
-      extra.matchBy === 'area'
-        ? Math.sqrt(area(main.px, main.W, ref) / area(sheet.px, sheet.W, cellBox))
-        : height(ref) / height(cellBox);
+    let scale = extra.scale;
+    if (scale === undefined) {
+      const [cellFrame, mainFrame] = extra.match;
+      const ref = mainBoxes[cfg.frames.indexOf(mainFrame)];
+      const cellBox = cells[typeof cellFrame === 'number' ? cellFrame : extra.cells[cellFrame]];
+      scale =
+        extra.matchBy === 'area'
+          ? Math.sqrt(area(main.px, main.W, ref) / area(sheet.px, sheet.W, cellBox))
+          : height(ref) / height(cellBox);
+    }
     for (const [name, cell] of Object.entries(extra.cells)) {
       names.push(name);
       boxes.push(scaleFigure(sheet.px, sheet.W, cells[cell], scale));

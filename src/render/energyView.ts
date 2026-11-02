@@ -17,6 +17,7 @@ import {
   spawnCount,
 } from './fx';
 import { GooBallFx, GooDrops, GooFighterFx, gooSplash } from './gooView';
+import { SOUND, SoundBallFx, SoundFighterFx } from './soundView';
 import { FIGHTER_HEIGHT, FLOOR_Y } from './layout';
 import { bolt, boltPoint, Crackle, drawBolts, radialArcs, type Bolt, type BoltFrame, type BoltLayer } from './lightning';
 
@@ -29,20 +30,27 @@ interface EnergyTheme {
   readonly lightning: boolean;
   /** Not energy but fluid: blasts and beams are drawn by gooView, hits splash instead of sparking. */
   readonly fluid?: boolean;
-  /** The guard shield's form: the element's dome (default), or a holy holographic cross. */
-  readonly shield?: 'dome' | 'cross';
+  /** Not energy but sound: blasts and beams are drawn by soundView. */
+  readonly sonic?: boolean;
+  /**
+   * The guard shield's form: the element's dome (default), a holy holographic cross, or the
+   * fighter's own tail curled up in front (the block pose is the shield; nothing glows).
+   */
+  readonly shield?: 'dome' | 'cross' | 'tail';
 }
 
 const THEMES: Readonly<Record<EnergyStyle, EnergyTheme>> = {
   fire: { core: 0xfff4d6, body: 0xffa63a, fringe: 0xff4a12, lightning: false },
   thunder: { core: 0xf4f9ff, body: 0x74bcff, fringe: 0x3f52ff, lightning: true },
   goo: { core: 0xffffff, body: 0xf3f0e6, fringe: 0xcbc5b2, lightning: false, fluid: true, shield: 'cross' },
+  // TKURII shields behind his tail.
+  sound: { ...SOUND, lightning: false, sonic: true, shield: 'tail' },
 };
 
 /** Seconds a fighter hit by goo keeps dripping it. */
 const GOOED_SECONDS = 1.6;
 
-/** A fired blast's look: energy or goo. */
+/** A fired blast's look: energy, goo or sound. */
 interface ShotFx {
   readonly root: Container;
   readonly ground: Sprite;
@@ -89,6 +97,8 @@ export class EnergyView {
   private readonly gooFighters: GooFighterFx[] = [];
   /** Per fighter: seconds left dripping goo from a hit. */
   private readonly gooed: number[] = [];
+  /** Each sound fighter's charge, burst and beam, see soundView.ts. */
+  private readonly soundFighters: SoundFighterFx[] = [];
   private readonly particles = new Particles(MAX_PARTICLES);
   private readonly projectileLayer = new Container();
   private readonly clashes: ClashFx[] = [];
@@ -132,6 +142,7 @@ export class EnergyView {
       }
       fx.update(prev.fighters[i] ?? f, f, alpha, this.time, dt, this.particles);
       this.updateGooFighter(i, prev.fighters[i] ?? f, f, alpha, dt);
+      this.updateSoundFighter(i, prev.fighters[i] ?? f, f, alpha, dt);
 
       const lost = (this.lastHealth[i] ?? f.health) - f.health;
       this.lastHealth[i] = f.health;
@@ -189,6 +200,32 @@ export class EnergyView {
     fx.update(prev, curr, alpha, this.time, dt);
   }
 
+  private updateSoundFighter(i: number, prev: FighterState, curr: FighterState, alpha: number, dt: number): void {
+    let fx = this.soundFighters[i];
+    if (!this.themeFor(i).sonic) {
+      fx?.hide();
+      return;
+    }
+    if (!fx) {
+      fx = this.soundFighters[i] = new SoundFighterFx();
+      this.root.addChildAt(fx.root, 0);
+    }
+    fx.update(prev, curr, alpha, this.time, dt, this.particles);
+  }
+
+  /** Camera offset: a sound beam rumbles the whole scene while it blares. */
+  shake(): { x: number; y: number } {
+    let x = 0;
+    let y = 0;
+    for (const fx of this.soundFighters) {
+      if (!fx) continue;
+      const s = fx.shake();
+      x += s.x;
+      y += s.y;
+    }
+    return { x, y };
+  }
+
   /** Goo stuck on a fighter who was hit with it runs off them in drips for a while. */
   private drip(i: number, f: FighterState, dt: number): void {
     const left = (this.gooed[i] ?? 0) - dt;
@@ -232,7 +269,7 @@ export class EnergyView {
       let fx = this.projectiles.get(p.id);
       if (!fx) {
         const theme = this.themeFor(p.owner);
-        fx = theme.fluid ? new GooBallFx(this.goo) : new ProjectileFx(theme);
+        fx = theme.fluid ? new GooBallFx(this.goo) : theme.sonic ? new SoundBallFx() : new ProjectileFx(theme);
         this.projectiles.set(p.id, fx);
         this.projectileLayer.addChild(fx.root);
         this.ground.addChild(fx.ground);
@@ -312,8 +349,8 @@ class FighterFx {
     const y = lerp(prev.y, curr.y, alpha);
     this.shield.update(curr, x, y, time, dt, particles);
 
-    // Goo blasts and streams are drawn by gooView.
-    if (this.theme.fluid || (curr.action !== 'blast' && curr.action !== 'beam')) return;
+    // Goo blasts and streams are drawn by gooView, sound ones by soundView.
+    if (this.theme.fluid || this.theme.sonic || (curr.action !== 'blast' && curr.action !== 'beam')) return;
     const move = MOVES[curr.action];
     const phase = phaseAt(move, curr.actionTick, curr.moveSustained);
     if (!phase) return;
@@ -622,6 +659,9 @@ class ShieldFx {
     this.sheet.tint = theme.body;
     this.palmGlow.tint = theme.body;
     this.palmCore.tint = theme.core;
+    // A tail is the shield itself: no projected light, only what blocked hits knock off it.
+    const projected = theme.shield !== 'tail';
+    for (const sp of [this.haze, this.sheet, this.palmGlow, this.palmCore]) sp.visible = projected;
   }
 
   update(f: FighterState, x: number, y: number, time: number, dt: number, particles: Particles): void {
@@ -658,8 +698,14 @@ class ShieldFx {
       const big = lost >= 10; // a kick or blast; a beam grinds in small steps every tick
       const at = SHIELD.impactAngle + (Math.random() - 0.5) * (big ? 0.3 : 0.12);
       const hit = world(rim(at, 4));
-      sparksOff(particles, hit, f.facing, big ? 26 : 3, t);
-      this.disperse(rim, at, f.facing, big ? 1 : 0.12, particles, world);
+      if (t.shield === 'tail') {
+        // Fur flies off the tail, and the attack's force rings out off it.
+        furTufts(particles, hit, f.facing, big ? 14 : spawnCount(0.3));
+        sparksOff(particles, hit, f.facing, big ? 10 : 1, t);
+      } else {
+        sparksOff(particles, hit, f.facing, big ? 26 : 3, t);
+        this.disperse(rim, at, f.facing, big ? 1 : 0.12, particles, world);
+      }
       if (big) this.ripple(hit);
     }
     this.flareMs = Math.max(0, this.flareMs - dt * 1000);
@@ -667,7 +713,7 @@ class ShieldFx {
 
     this.lines.clear();
     this.root.visible = blocking;
-    if (!blocking) return;
+    if (!blocking || t.shield === 'tail') return;
 
     const flare = this.flareMs / SHIELD_FLARE_MS;
     // A weak guard sputters.
@@ -1068,7 +1114,10 @@ class ShieldFx {
 
   private shatter(point: (a: number) => Point, particles: Particles): void {
     const t = this.theme;
-    if (!t.lightning && t.shield !== 'cross') {
+    if (t.shield === 'tail') {
+      // The tail is battered open: a burst of fur.
+      for (let i = 0; i < 8; i++) furTufts(particles, point((Math.random() * 2 - 1) * SHIELD.sweep), 0, 5);
+    } else if (!t.lightning && t.shield !== 'cross') {
       // Fire: the dome collapses in a gout of flame.
       for (let i = 0; i < 24; i++) {
         const p = point((Math.random() * 2 - 1) * SHIELD.sweep);
@@ -1124,6 +1173,32 @@ function sparksOff(particles: Particles, p: Point, facing: number, count: number
       size: 2 + Math.random() * 4,
       tint: Math.random() < 0.5 ? t.core : t.body,
       drag: 5,
+    });
+  }
+}
+
+/** A squirrel tail's fur, from its pale tips to the deep rust at its root. */
+const FUR_TONES = [0xf0a24e, 0xd9772b, 0xb85a1e, 0x8f4216] as const;
+
+/** Tufts of fur knocked loose off a tail facing `facing` (0: every way): they puff out, then drift down. */
+function furTufts(particles: Particles, p: Point, facing: number, count: number): void {
+  for (let i = 0; i < count; i++) {
+    const angle = facing === 0 ? Math.random() * Math.PI * 2 : (Math.random() - 0.5) * 2.4;
+    const speed = 80 + Math.random() * 260;
+    particles.emit({
+      x: p.x + (Math.random() - 0.5) * 20,
+      y: p.y + (Math.random() - 0.5) * 50,
+      vx: (facing || 1) * Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed - 60,
+      life: 0.6 + Math.random() * 0.6,
+      size: 5 + Math.random() * 6,
+      tint: FUR_TONES[Math.floor(Math.random() * FUR_TONES.length)],
+      round: true,
+      grow: 0.7,
+      alpha: 0.95,
+      blend: 'normal',
+      gravity: 220,
+      drag: 3,
     });
   }
 }

@@ -1,5 +1,5 @@
-import { CATACLYSMS, STAGE_MARGIN, STAGE_WIDTH } from './constants';
-import { MOVES, isMoveId, phaseAt } from './moves';
+import { CATACLYSMS, DREAM, STAGE_MARGIN, STAGE_WIDTH } from './constants';
+import { MOVES, isMoveId, phaseAt, type Element } from './moves';
 import { nextRandom } from './rng';
 import type { Cataclysm, FighterState, Strike } from './state';
 
@@ -14,7 +14,8 @@ export interface CataclysmStep {
  * Supers for one tick. A fighter whose super lands (first active tick) starts (or restarts) their
  * cataclysm; while it lasts, strikes of its element open at seeded-random spots, some aimed near
  * the opponent; every strike ages through warn -> active -> fade and is then dropped.
- * `roundOver` stops new strikes (the ones already under way play out).
+ * `roundOver` stops new strikes (the ones already under way play out). A mind super (the dream)
+ * starts here too, but dream.ts runs it.
  */
 export function stepCataclysms(
   cataclysms: readonly Cataclysm[],
@@ -38,7 +39,8 @@ export function stepCataclysms(
     if (phase?.phase !== 'active' || phase.tick !== 0) return;
     // The first strike follows the super almost at once (unless the super has an entrance).
     active = active.filter((c) => c.owner !== owner);
-    active.push({ owner, kind: f.element, tick: 0, nextStrikeIn: CATACLYSMS[f.element].firstStrike ?? 8 });
+    const nextStrikeIn = f.element === 'mind' ? 0 : (CATACLYSMS[f.element].firstStrike ?? 8);
+    active.push({ owner, kind: f.element, tick: 0, nextStrikeIn, dealt: 0 });
   });
 
   const aged = strikes
@@ -50,6 +52,10 @@ export function stepCataclysms(
 
   const next: Cataclysm[] = [];
   for (const c of active) {
+    if (c.kind === 'mind') {
+      next.push(c);
+      continue;
+    }
     const def = CATACLYSMS[c.kind];
     const tick = c.tick + 1;
     let wait = c.nextStrikeIn - 1;
@@ -66,6 +72,11 @@ export function stepCataclysms(
   }
 
   return { cataclysms: next, strikes: aged, rngSeed: seed, nextId };
+}
+
+/** How long a super of this element runs, in ticks. */
+export function cataclysmTicks(kind: Element): number {
+  return kind === 'mind' ? DREAM.ticks : CATACLYSMS[kind].ticks;
 }
 
 /** Is the strike dangerous (lava up, bolt down) at its current age? */

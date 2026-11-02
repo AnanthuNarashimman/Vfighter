@@ -39,14 +39,30 @@ Damage is kept low so fights last: a clean kick 42, a blast 52, of 1000 health.
   ~0.4s, then slowed for ~0.7s (`TRAP` in `sim/constants.ts`). A trapped fighter isn't aimed at and
   can't be hit again until the goo lets go, so they always get to move away. When it ends the colossus
   melts back into the valley. Nothing covers the play area, and the name is never shown.
+- **Nutmare** (TKURII, mind): no strikes, a dream (`sim/dream.ts`, `render/dreamView.ts`). He
+  focuses (psychic rings round his head), then thrusts a brain wave into the opponent's head;
+  hallucination circles close in on them as the screen fades to a red-black. It fades back in on
+  the same valley, nothing added to it, but TKURII is gone (he can't be hit or bumped while away)
+  and the picture itself is wrong: the whole scene is colour-graded red, swinging to a burning
+  yellow and back to red (~7s a swing); it wobbles in slow waves as if through heat; a ghost of the
+  valley drifts over it out of register; the view breathes in and out and tilts; a crimson vignette
+  pulses like a heartbeat; and now and then it glitches (a negative flash, a jolt). It all builds
+  over the dream. Squirrels burrow up out of dirt mounds, run, wind up and lunge to bite; any kick,
+  blast or beam knocks one out. A director keeps the dream's damage between 140 and 220 (`DREAM`)
+  and spreads it over the whole dream: the better the opponent fends them off, the more squirrels
+  it sends, closer, with ambushes from right under their feet, and if they are still short near the
+  end a pile of squirrels that can't be stopped brings down the rest; when the squirrels are ahead
+  of pace they hold back and circle the opponent instead. Standing still or turtling takes the full
+  220; fighting back well gets it down toward 140. After ~19s in the dream the squirrels burrow
+  away, the circles spin again, and it is reality, with TKURII back where he stood.
 
-Ducking slips under blasts and beams but kicks still land. Blocking raises a shield that stops
+Ducking slips under blasts and beams (except TKURII's, see below) but kicks still land. Blocking raises a shield that stops
 everything but drains the guard meter (blocked hits, and slowly just holding it); an empty guard
 breaks and leaves you stunned, and the shield can't go back up until the guard refills past the notch.
 
-Pick characters before the fight: C cycles P1 (FLASH, VOLT, GOONER), M cycles P2. Once anyone
-presses a fight key the picks are locked until the next round. They are kept in the URL
-(`?p1=maroon&p2=navy`, also `gooner`), so a reload keeps them. In solo testing the super meter
+Pick characters before the fight: C cycles P1 (FLASH, VOLT, GOONER, TKURII), M cycles P2. Once
+anyone presses a fight key the picks are locked until the next round. They are kept in the URL
+(`?p1=maroon&p2=navy`, also `gooner` and `tkurii`), so a reload keeps them. In solo testing the super meter
 refills on its own. H toggles the controls strip.
 
 **GOONER** fights with fluid instead of energy (`render/gooView.ts`): his blast is a jiggling ball of
@@ -54,8 +70,21 @@ sticky white goo, and his beam a powerful straight jet poured from his forward p
 stream poses: gathering it hands together, then arched back with arms out) that
 sprays where it hits; goo lands as puddles and hit fighters drip for a while. His shield is a holy
 holographic cross (white-gold, scanlines, halo and rays, the odd glitch). His super is Goon Fall
-(`render/colossusView.ts`). The **Test GOONER solo** button at the top (or `?solo=gooner`) puts him
-alone on the stage on P1's keys; **Back to versus** returns to the match.
+(`render/colossusView.ts`).
+
+The **Test character solo** button at the top (or `?solo=<id>`, e.g. `?solo=gooner`) puts P1's
+current character alone on the stage on P1's keys; C cycles through every character at any time,
+even mid-fight, so any of them can be tested. **Back to versus** returns to the match.
+
+**TKURII**, a squirrel-tailed brawler, fights with sound (`render/soundView.ts`): rings of it gather in his hands, his
+blast is a humming ball that throws rings off itself and leaves wavefronts behind, and his beam is a
+loud, widening cone of sound with `)))` wavefronts racing down it and a shockwave at its head; the
+scene rumbles while it blares. Sound spreads, so ducking can't fully clear it: a ducking fighter
+is grazed for 40% of the damage (`SONIC_GRAZE`), without being stunned or knocked out of the duck,
+and the beam carries on over them. His shield is his own tail: he hunches behind it, curled up in front
+of him, and blocked hits knock tufts of fur off it (a guard break bursts it open). His super is
+Nutmare (above). His duck and slide (skid) poses come from their own sheet, his shield stance from
+another; the dream's squirrels are built from their own sheet into `critters/`.
 
 ## Asset pipeline
 

@@ -25,13 +25,13 @@ export class LocalSession {
   }
 
   /**
-   * Change a fighter's element (and so super) and kit, for switching characters while testing
+   * Change a fighter's loadout (element and so super, kit, sonic attacks), for switching characters while testing
    * locally. Patches both kept states so interpolation stays consistent.
    */
   setLoadout(fighter: number, loadout: Loadout): void {
     const patch = (s: GameState): GameState => ({
       ...s,
-      fighters: s.fighters.map((f, i) => (i === fighter ? { ...f, element: loadout.element, kit: loadout.kit } : f)),
+      fighters: s.fighters.map((f, i) => (i === fighter ? { ...f, ...loadout } : f)),
     });
     this.previous = patch(this.previous);
     this.current = patch(this.current);

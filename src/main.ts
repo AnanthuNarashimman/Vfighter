@@ -11,11 +11,10 @@ import { computeLayout } from './render/layout';
 import { StageBackground } from './render/stageView';
 import { StormView } from './render/stormView';
 import { ColossusView, type GiantMeta } from './render/colossusView';
+import { DreamView } from './render/dreamView';
 import { createInitialState, type Loadout } from './sim/state';
 
 const ASSETS = import.meta.env.BASE_URL + 'assets/';
-/** The character the test button tries out alone. */
-const TEST_CHARACTER = 'gooner';
 
 async function main(): Promise<void> {
   const host = document.getElementById('game')!;
@@ -32,10 +31,11 @@ async function main(): Promise<void> {
   });
   host.appendChild(app.canvas);
 
-  const [stageTex, colossusTex, colossusMeta, ...sheets] = await Promise.all([
+  const [stageTex, colossusTex, colossusMeta, squirrelSheet, ...sheets] = await Promise.all([
     Assets.load<Texture>(ASSETS + 'stages/valley.png'),
     Assets.load<Texture>(ASSETS + 'supers/colossus.png'),
     Assets.load<GiantMeta>(ASSETS + 'supers/colossus.json'),
+    Assets.load<Spritesheet>(ASSETS + 'critters/squirrel.json'),
     ...CHARACTERS.map((c) => Assets.load<Spritesheet>(ASSETS + c.sheet)),
   ]);
 
@@ -47,30 +47,40 @@ async function main(): Promise<void> {
   const inferno = new InfernoView();
   const storm = new StormView();
   const colossus = new ColossusView(colossusTex as Texture, colossusMeta as GiantMeta);
+  // Nutmare (mind): TKURII's dream, full of squirrels, in a warped red-and-yellow valley.
+  const dream = new DreamView(squirrelSheet as Spritesheet);
   world.addChild(
     storm.back,
     inferno.back,
     colossus.back,
+    dream.back,
     energy.ground,
     fightersLayer,
+    dream.front,
     energy.root,
     colossus.front,
     inferno.front,
     storm.front,
   );
-  // Solo test mode (?solo=<id>): that character alone on the stage, on P1's keys. Otherwise a
+  // Solo test mode (?solo=<id>): that character alone on the stage, on P1's keys (C cycles it). Otherwise a
   // versus match with characters from ?p1=<id>&p2=<id> (defaults: P1 the first, P2 the second).
   const params = new URLSearchParams(location.search);
   const solo = CHARACTERS.findIndex((c) => c.id === params.get('solo'));
   const pickParams = solo >= 0 ? ['solo'] : ['p1', 'p2'];
+  // Characters still being built are only offered in solo testing.
+  const offered = (i: number): boolean => solo >= 0 || !CHARACTERS[i].soloOnly;
   const picks = pickParams.map((param, i) => {
-    const found = CHARACTERS.findIndex((c) => c.id === params.get(param));
+    const found = CHARACTERS.findIndex((c, j) => c.id === params.get(param) && offered(j));
     return found >= 0 ? found : i % CHARACTERS.length;
   });
-  addModeButton(solo >= 0);
+  addModeButton(solo >= 0, () => CHARACTERS[picks[0]].id);
 
   const hud = new Hud(picks.length);
-  app.stage.addChild(background.sprite, colossus.sky, storm.sky, inferno.sky, world, colossus.overlay, storm.overlay, inferno.flash, hud.root);
+  // The scene (painting, skies, world) sits in one container, so the dream can warp it as a whole.
+  const scene = new Container();
+  scene.addChild(background.sprite, colossus.sky, storm.sky, inferno.sky, world);
+  dream.attach(scene, background.sprite);
+  app.stage.addChild(scene, colossus.overlay, storm.overlay, inferno.flash, dream.overlay, hud.root);
 
   let worldX = 0;
   let worldY = 0;
@@ -84,6 +94,7 @@ async function main(): Promise<void> {
     inferno.layout(view);
     storm.layout(view);
     colossus.layout(view);
+    dream.layout(view);
     hud.layout(view);
   };
   applyLayout();
@@ -101,8 +112,9 @@ async function main(): Promise<void> {
   });
 
   // Before the fight, C cycles P1's character and M cycles P2's; once anyone presses a fight key the
-  // picks are locked until the next round. The URL follows, so a reload keeps the picks. The
-  // simulation's side of a character (element, kit) is patched into the running state.
+  // picks are locked until the next round (in solo testing they never lock). The URL follows, so a
+  // reload keeps the picks. The simulation's side of a character (element, kit) is patched into the
+  // running state.
   const applyCharacter = (player: number): void => {
     const character = CHARACTERS[picks[player]];
     views[player].setSheet(sheets[picks[player]] as Spritesheet);
@@ -115,8 +127,11 @@ async function main(): Promise<void> {
   const switchKeys = ['KeyC', 'KeyM'];
   window.addEventListener('keydown', (e) => {
     const player = switchKeys.indexOf(e.code);
-    if (player < 0 || player >= views.length || e.repeat || session.current.started) return;
-    picks[player] = (picks[player] + 1) % CHARACTERS.length;
+    // Solo testing has no match to keep fair, so C switches at any time there.
+    const locked = session.current.started && solo < 0;
+    if (player < 0 || player >= views.length || e.repeat || locked) return;
+    do picks[player] = (picks[player] + 1) % CHARACTERS.length;
+    while (!offered(picks[player]));
     applyCharacter(player);
     const url = new URL(location.href);
     url.searchParams.set(pickParams[player], CHARACTERS[picks[player]].id);
@@ -129,12 +144,12 @@ async function main(): Promise<void> {
     inferno.update(previous, current, alpha, ticker.deltaMS);
     storm.update(previous, current, alpha, ticker.deltaMS);
     colossus.update(previous, current, alpha, ticker.deltaMS);
-    background.sprite.tint = multiplyColor(
-      multiplyColor(inferno.backgroundTint(), storm.backgroundTint()),
-      colossus.backgroundTint(),
-    );
-    const light = multiplyColor(multiplyColor(inferno.fighterTint(), storm.fighterTint()), colossus.fighterTint());
+    dream.update(previous, current, alpha, ticker.deltaMS);
+    background.sprite.tint = [storm, colossus, dream].reduce((tint, v) => multiplyColor(tint, v.backgroundTint()), inferno.backgroundTint());
+    const light = [storm, colossus, dream].reduce((tint, v) => multiplyColor(tint, v.fighterTint()), inferno.fighterTint());
     current.fighters.forEach((f, i) => {
+      // A dreamer is away in their dream: not on the stage.
+      views[i].root.visible = !dream.hidden(i);
       views[i].setAmbient(light);
       views[i].update(previous.fighters[i], f, alpha, ticker.deltaMS);
     });
@@ -144,25 +159,33 @@ async function main(): Promise<void> {
     const a = inferno.shake();
     const b = storm.shake();
     const c = colossus.shake();
-    world.position.set(worldX + a.x + b.x + c.x, worldY + a.y + b.y + c.y);
-    background.shake(a.x + b.x + c.x, a.y + b.y + c.y);
+    // A sound beam rumbles the scene while it blares; the dream sways it.
+    const d = energy.shake();
+    const e = dream.shake();
+    const shakeX = a.x + b.x + c.x + d.x + e.x;
+    const shakeY = a.y + b.y + c.y + d.y + e.y;
+    world.position.set(worldX + shakeX, worldY + shakeY);
+    background.shake(shakeX, shakeY);
   });
 }
 
 function loadoutOf(character: CharacterDef): Loadout {
-  return { element: character.element, kit: character.kit };
+  // Sound spreads as it travels, so ducking can't fully clear it.
+  return { element: character.element, kit: character.kit, sonic: character.energy === 'sound' };
 }
 
-/** Top-centre button: from a match, try the test character alone; from solo, back to the match. */
-function addModeButton(solo: boolean): void {
+/**
+ * Top-centre button: from a match, try P1's current character alone (C then cycles through every
+ * character); from solo, back to the match.
+ */
+function addModeButton(solo: boolean, soloPick: () => string): void {
   const button = document.createElement('button');
   button.id = 'mode-button';
-  const name = CHARACTERS.find((c) => c.id === TEST_CHARACTER)?.name ?? TEST_CHARACTER;
-  button.textContent = solo ? 'Back to versus' : `Test ${name} solo`;
+  button.textContent = solo ? 'Back to versus' : 'Test character solo';
   button.addEventListener('click', () => {
     const url = new URL(location.href);
     if (solo) url.searchParams.delete('solo');
-    else url.searchParams.set('solo', TEST_CHARACTER);
+    else url.searchParams.set('solo', soloPick());
     location.href = url.toString();
   });
   document.body.appendChild(button);

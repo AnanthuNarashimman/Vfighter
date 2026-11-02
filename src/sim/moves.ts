@@ -2,7 +2,9 @@ import { METER_MAX, TRAP } from './constants';
 import type { Button } from './input';
 
 /** A fighter's element decides which super it has. */
-export type Element = 'fire' | 'thunder' | 'goo';
+export type Element = 'fire' | 'thunder' | 'goo' | 'mind';
+/** The elements whose supers strike the stage (cataclysm.ts); mind's dream sends squirrels instead (dream.ts). */
+export type StrikeKind = Exclude<Element, 'mind'>;
 
 /**
  * Data-driven move definitions. A move is a sequence of timed phases; while a move runs the fighter
@@ -76,7 +78,7 @@ export interface HitDef {
  * up under the opponent: heavy, and launches. A lightning bolt from above: as heavy, and the shock
  * locks them up longer, but it only jolts them off their feet.
  */
-export const STRIKE_HITS: Readonly<Record<Element, HitDef>> = {
+export const STRIKE_HITS: Readonly<Record<StrikeKind, HitDef>> = {
   fire: { damage: 40, guardDamage: 0, hitstun: 30, knockback: 5, launch: 12, unblockable: true },
   thunder: { damage: 44, guardDamage: 0, hitstun: 40, knockback: 3, launch: 5, unblockable: true },
   // A goo ball from above: doesn't knock anyone away; it glues them down instead (see TRAP).
@@ -166,26 +168,47 @@ const MOVE_TABLE = {
     element: 'goo',
     cataclysm: true,
   },
+  // Mind's super, Nutmare: focus (interruptible), then thrust a brain wave at the opponent, who
+  // falls into a dream full of squirrels (see dream.ts).
+  brainwave: {
+    button: 'super',
+    phases: [
+      { phase: 'startup', ticks: 36 },
+      { phase: 'active', ticks: 10 },
+      { phase: 'recovery', ticks: 22 },
+    ],
+    allowedInAir: false,
+    meterCost: METER_MAX,
+    element: 'mind',
+    cataclysm: true,
+  },
 } as const satisfies Record<string, MoveDef>;
 
 export type MoveId = keyof typeof MOVE_TABLE;
 export const MOVES: Readonly<Record<MoveId, MoveDef>> = MOVE_TABLE;
 /** Checked in this order when several buttons are pressed on the same tick. */
-export const MOVE_PRIORITY: readonly MoveId[] = ['super', 'storm', 'goonFall', 'kick', 'blast', 'beam'];
+export const MOVE_PRIORITY: readonly MoveId[] = ['super', 'storm', 'goonFall', 'brainwave', 'kick', 'blast', 'beam'];
 
 /**
- * Which moves a fighter has, on top of walking, jumping, ducking and blocking (which every kit has).
- * `full`: all of them, including the element's super. `basic`: hand-to-hand only, the kick.
+ * Which moves a fighter has, on top of walking, jumping and ducking (which every kit has).
+ * `full`: all of them, including the element's super, and the shield. `basic`: hand-to-hand only,
+ * the kick, with no shield.
  */
 export type Kit = 'full' | 'basic';
 const KIT_MOVES: Readonly<Record<Kit, ReadonlySet<MoveId> | 'all'>> = {
   full: 'all',
   basic: new Set<MoveId>(['kick']),
 };
+const KIT_BLOCKS: Readonly<Record<Kit, boolean>> = { full: true, basic: false };
 
 export function kitHasMove(kit: Kit, id: MoveId): boolean {
   const moves = KIT_MOVES[kit];
   return moves === 'all' || moves.has(id);
+}
+
+/** Whether the kit can raise the shield. */
+export function kitCanBlock(kit: Kit): boolean {
+  return KIT_BLOCKS[kit];
 }
 
 /**

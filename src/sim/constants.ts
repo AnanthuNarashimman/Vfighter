@@ -1,4 +1,4 @@
-import type { Element } from './moves';
+import type { HitDef, StrikeKind } from './moves';
 
 /**
  * Simulation tuning. Units: stage pixels (1280-wide stage) and ticks (60 per second).
@@ -53,6 +53,11 @@ export const HURT_HEIGHT = 200;
  * ~141px, with a 24px radius), so ducking dodges energy; kicks still reach it.
  */
 export const CROUCH_HURT_HEIGHT = 112;
+/**
+ * Share of a sonic blast's or beam's damage that still reaches a fighter ducking under it (the wave
+ * spreads). A graze doesn't stun or shove, so the fighter stays down and only takes this much.
+ */
+export const SONIC_GRAZE = 0.4;
 
 /**
  * Guard: the shield's strength. Blocked hits and holding the shield drain it; it refills once
@@ -124,7 +129,7 @@ export interface CataclysmDef {
  */
 export const STRIKE_GRACE_TICKS = 70;
 
-export const CATACLYSMS: Readonly<Record<Element, CataclysmDef>> = {
+export const CATACLYSMS: Readonly<Record<StrikeKind, CataclysmDef>> = {
   // Inferno: the ground cracks, glows, and erupts in a roaring lava column. The crack gives only a
   // short warning (~0.4s), and most eruptions open near the opponent.
   fire: {
@@ -179,6 +184,60 @@ export const CATACLYSMS: Readonly<Record<Element, CataclysmDef>> = {
  * can't walk or jump at all (they can still block and attack), then they move at `slow` speed.
  */
 export const TRAP = { ticks: 66, stuckTicks: 24, slow: 0.5 } as const;
+
+/**
+ * Mind's super, Nutmare (see dream.ts), in ticks from the brain wave landing. Hallucination circles
+ * close in on the opponent as the screen goes black; the dream swaps in at `dreamFrom` (the caster
+ * is gone from it); squirrels spawn from `spawnFrom` until `finaleAt`; at `outro` they leave and
+ * the screen goes black again; reality swaps back at `wakeAt`; the super ends at `ticks`.
+ *
+ * The dream makes sure it hurts: a director keeps the squirrels' health damage between
+ * `minDamage` and `maxDamage`, sending more, closer, and ambushers when the target is fending them
+ * off (and holding back when they are ahead of a pace that reaches `maxDamage` only at the end),
+ * and if it is still short at `finaleAt`, a pile of squirrels that can't be stopped.
+ */
+export const DREAM = {
+  ticks: 1300,
+  dreamFrom: 52,
+  spawnFrom: 110,
+  finaleAt: 1110,
+  outro: 1190,
+  wakeAt: 1230,
+  minDamage: 140,
+  maxDamage: 190,
+} as const;
+
+/**
+ * The dream's squirrels. Body: `halfWidth` either side, `height` tall. They burrow up (a mound
+ * warns for `burrowTicks`; an ambusher, under the target, for `ambushTicks`), leap out at `leapVy`,
+ * run at `runSpeed`, and within `reach` wind up for `windupTicks` and lunge (`lungeVx`, `lungeVy`),
+ * then catch their breath for `recoverTicks`. One hit knocks one out. At most `maxAlive` at once;
+ * the finale's pile is `pileCount` of them, landing on the target `pileTicks` after leaping.
+ */
+export const SQUIRREL = {
+  halfWidth: 26,
+  height: 64,
+  burrowTicks: 40,
+  ambushTicks: 34,
+  leapVy: 11,
+  runSpeed: 4,
+  reach: 95,
+  windupTicks: 14,
+  lungeVx: 8,
+  lungeVy: 7.5,
+  recoverTicks: 24,
+  knockedTicks: 50,
+  poofTicks: 22,
+  maxAlive: 14,
+  pileCount: 8,
+  pileTicks: 34,
+} as const;
+
+/** A squirrel's lunging bite, and an ambusher's leap out of the ground under the target (no shield faces the ground). */
+export const SQUIRREL_HITS: Readonly<{ bite: HitDef; ambush: HitDef }> = {
+  bite: { damage: 10, guardDamage: 9, hitstun: 12, knockback: 3 },
+  ambush: { damage: 13, guardDamage: 0, hitstun: 18, knockback: 2, launch: 6, unblockable: true },
+};
 
 /** Projectiles are removed once this far outside the stage. */
 export const PROJECTILE_DESPAWN_MARGIN = 400;

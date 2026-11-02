@@ -47,6 +47,8 @@ const MOVE_FRAMES: Record<MoveId, Record<MovePhase, FrameName>> = {
   storm: { startup: 'blast_charge', active: 'blast_release', recovery: 'blast_release' },
   // Gathering the goo, then flinging the arms out to raise the giant.
   goonFall: { startup: 'blast_charge', active: 'blast_release', recovery: 'blast_release' },
+  // Focusing the mind, then thrusting the brain wave out at the opponent.
+  brainwave: { startup: 'blast_charge', active: 'blast_release', recovery: 'blast_release' },
 };
 
 /** Pure view of the simulation: which sprite frame represents this fighter right now. */

@@ -28,9 +28,11 @@ import {
 } from './constants';
 import { stepCataclysms } from './cataclysm';
 import { resolveCombat, strikeHits } from './combat';
+import { stepDream } from './dream';
 import { NO_INPUT, type Button, type InputFrame } from './input';
-import { MOVES, MOVE_PRIORITY, MUZZLE, isMoveId, kitHasMove, phaseAt, sustainEndTick, type MoveId } from './moves';
+import { MOVES, MOVE_PRIORITY, MUZZLE, isMoveId, kitCanBlock, kitHasMove, phaseAt, sustainEndTick, type MoveId } from './moves';
 import {
+  awayInDream,
   createInitialState,
   loadoutOf,
   setAction,
@@ -58,7 +60,8 @@ export function step(state: GameState, inputs: readonly InputFrame[]): GameState
   const fighters: Mutable<FighterState>[] = state.fighters.map((f, owner) => {
     // Once the round is decided nobody takes input; bodies still fall and slide.
     const input = state.ko ? NO_INPUT : (inputs[owner] ?? NO_INPUT);
-    const opponent = state.fighters.find((_, j) => j !== owner);
+    // A dreamer away in their dream is nobody to face.
+    const opponent = state.fighters.find((o, j) => j !== owner && !awayInDream(o));
     const spawn = (p: ProjectileSpawn) => spawned.push({ ...p, id: nextId++, owner, age: 0 });
     const channeling = state.cataclysms.some((c) => c.owner === owner);
     const next: Mutable<FighterState> = stepFighter(f, input, spawn, opponent?.x, channeling);
@@ -81,6 +84,7 @@ export function step(state: GameState, inputs: readonly InputFrame[]): GameState
 
   const supers = stepCataclysms(state.cataclysms, state.strikes, fighters, state.rngSeed, nextId, state.ko !== null);
   const strikes = strikeHits(fighters, supers.strikes);
+  const dream = stepDream(supers.cataclysms, state.critters, fighters, projectiles, supers.rngSeed, supers.nextId, state.ko !== null);
 
   let ko = state.ko && { ...state.ko, tick: state.ko.tick + 1 };
   if (!ko && fighters.some((f) => f.health <= 0)) {
@@ -90,13 +94,14 @@ export function step(state: GameState, inputs: readonly InputFrame[]): GameState
 
   return {
     tick,
-    rngSeed: supers.rngSeed,
+    rngSeed: dream.rngSeed,
     fighters,
-    projectiles,
-    nextProjectileId: supers.nextId,
+    projectiles: dream.projectiles,
+    nextProjectileId: dream.nextId,
     clashes,
-    cataclysms: supers.cataclysms,
+    cataclysms: dream.cataclysms,
     strikes,
+    critters: dream.critters,
     started,
     ko,
   };
@@ -177,7 +182,7 @@ export function stepFighter(
     if (opponentX !== undefined && opponentX !== f.x) f.facing = opponentX > f.x ? 1 : -1;
     else if (dir !== 0) f.facing = dir;
     // Keeping the shield up only needs some guard left; raising it again needs a reserve.
-    const canBlock = f.action === 'block' ? f.guard > 0 : f.guard >= GUARD_RAISE_MIN;
+    const canBlock = kitCanBlock(f.kit) && (f.action === 'block' ? f.guard > 0 : f.guard >= GUARD_RAISE_MIN);
     if (input.block && canBlock) {
       // Planted behind the shield; blocked hits still slide the blocker back.
       if (f.action !== 'block') {

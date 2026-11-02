@@ -1,6 +1,7 @@
 import { Container, Graphics, Text, type Ticker } from 'pixi.js';
-import { CATACLYSMS, ENERGY_MAX, GUARD_MAX, GUARD_RAISE_MIN, HEALTH_MAX, METER_MAX } from '../sim/constants';
-import { MOVES, kitHasMove } from '../sim/moves';
+import { ENERGY_MAX, GUARD_MAX, GUARD_RAISE_MIN, HEALTH_MAX, METER_MAX } from '../sim/constants';
+import { cataclysmTicks } from '../sim/cataclysm';
+import { MOVES, kitCanBlock, kitHasMove } from '../sim/moves';
 import type { Element, Kit, MoveId } from '../sim/moves';
 import type { FighterState, GameState } from '../sim/state';
 import { CHARACTERS, type CharacterDef, type HudPalette } from './characters';
@@ -57,18 +58,18 @@ const CONTROLS_FADE_MS = 600;
 /** Vertical distance between the two players' control strips. */
 const CONTROLS_ROW = 32;
 
-/** `move`: listed only for fighters whose kit has it. */
-type ControlHint = readonly [keys: readonly string[], label: string, move?: MoveId];
+/** `move`: listed only for fighters whose kit has it (`block`: whose kit has the shield). */
+type ControlHint = readonly [keys: readonly string[], label: string, move?: MoveId | 'block'];
 
 /** Per player, matching input/keyboard.ts PLAYER_BINDINGS. The last entry is the character switch (see main.ts). */
 const CONTROLS: readonly (readonly ControlHint[])[] = [
   [
     [['A', 'D'], 'move'], [['W'], 'jump'], [['S'], 'duck'], [['K'], 'kick'], [['J'], 'blast', 'blast'],
-    [['L'], 'beam', 'beam'], [['I'], 'block'], [['O'], 'super', 'super'], [['C'], 'pick fighter'],
+    [['L'], 'beam', 'beam'], [['I'], 'block', 'block'], [['O'], 'super', 'super'], [['C'], 'pick fighter'],
   ],
   [
     [['←', '→'], 'move'], [['↑'], 'jump'], [['↓'], 'duck'], [['.'], 'kick'], [[','], 'blast', 'blast'],
-    [['/'], 'beam', 'beam'], [['R-Shift'], 'block'], [['Enter'], 'super', 'super'], [['M'], 'pick fighter'],
+    [['/'], 'beam', 'beam'], [['R-Shift'], 'block', 'block'], [['Enter'], 'super', 'super'], [['M'], 'pick fighter'],
   ],
 ];
 /** Each player's super key, for the SUPER READY tag. */
@@ -78,6 +79,7 @@ const SUPER_LOOK: Readonly<Record<Element, { name: string | null; label: number;
   fire: { name: 'INFERNO', label: 0xffb347, bar: 0xff6a1a, trough: 0x2a0a04 },
   thunder: { name: 'TEMPEST', label: 0xa8d4ff, bar: 0x5cb4ff, trough: 0x0a1428 },
   goo: { name: null, label: 0xfffbf0, bar: 0xf3f0e6, trough: 0x1e1c18 },
+  mind: { name: 'NUTMARE', label: 0xffd23a, bar: 0xff3a1a, trough: 0x2a0606 },
 };
 
 /**
@@ -156,7 +158,7 @@ export class Hud {
       const f = state.fighters[i];
       panel.root.visible = f !== undefined;
       const own = state.cataclysms.find((c) => c.owner === i);
-      const superLeft = own ? 1 - own.tick / CATACLYSMS[own.kind].ticks : null;
+      const superLeft = own ? 1 - own.tick / cataclysmTicks(own.kind) : null;
       if (f) panel.update(f, ticker.deltaMS, this.time, superLeft);
     });
 
@@ -192,7 +194,7 @@ export class Hud {
       row.addChild(tag);
       let cx = 14 + tag.width + 12;
       for (const [keys, label, move] of hints) {
-        if (move && !kitHasMove(this.kits[player], move)) continue;
+        if (move && !(move === 'block' ? kitCanBlock(this.kits[player]) : kitHasMove(this.kits[player], move))) continue;
         for (const k of keys) {
           cx += keyCap(row, k, cx) + 3;
         }
@@ -290,8 +292,10 @@ class PlayerPanel {
   /** `superLeft`: share of this player's super (cataclysm) still to run, or null if none is. */
   update(f: FighterState, deltaMs: number, time: number, superLeft: number | null): void {
     const dt = deltaMs / 1000;
-    // Without energy moves the gauge means nothing; without a super, neither does the meter.
+    // Without energy moves the gauge means nothing; without a super, neither does the meter; without
+    // a shield, neither does the guard.
     this.gauge.visible = kitHasMove(f.kit, 'blast');
+    this.guardBar.visible = kitCanBlock(f.kit);
     const hasSuper = kitHasMove(f.kit, 'super');
     this.superTag.visible = this.superBar.visible = this.meterBar.visible = hasSuper;
     if (hasSuper) {

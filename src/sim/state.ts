@@ -1,5 +1,5 @@
 import { NO_INPUT, type InputFrame } from './input';
-import type { Element, Kit, MoveId } from './moves';
+import type { Element, Kit, MoveId, StrikeKind } from './moves';
 import { COUNTER_CAP, ENERGY_MAX, GUARD_MAX, HEALTH_MAX, STAGE_WIDTH } from './constants';
 
 /**
@@ -15,11 +15,16 @@ export interface Loadout {
   readonly element: Element;
   /** Which moves the fighter has. */
   readonly kit: Kit;
+  /**
+   * Blasts and beams are a spreading wave of sound: ducking under them doesn't get fully clear,
+   * it only cuts the damage (see SONIC_GRAZE).
+   */
+  readonly sonic: boolean;
 }
 
 export const DEFAULT_LOADOUTS: readonly Loadout[] = [
-  { element: 'fire', kit: 'full' },
-  { element: 'thunder', kit: 'full' },
+  { element: 'fire', kit: 'full', sonic: false },
+  { element: 'thunder', kit: 'full', sonic: false },
 ];
 
 export interface FighterState extends Loadout {
@@ -96,25 +101,59 @@ export interface Clash {
 
 /**
  * A super in progress: the owner's element strikes the stage at random until `tick` reaches its
- * CATACLYSMS duration (fire: Inferno's eruptions; thunder: Tempest's lightning).
+ * CATACLYSMS duration (fire: Inferno's eruptions; thunder: Tempest's lightning). Mind's runs the
+ * dream instead (DREAM.ticks): no strikes, squirrels.
  */
 export interface Cataclysm {
   readonly owner: number;
   readonly kind: Element;
   readonly tick: number;
-  /** Ticks until the next strike starts. */
+  /** Ticks until the next strike starts (the dream: the next squirrel). */
   readonly nextStrikeIn: number;
+  /** The dream only: health its squirrels have taken off the target so far. */
+  readonly dealt: number;
 }
 
 /** One strike of a cataclysm (an eruption, a lightning bolt). Phases by `age`: warn, active, fade. */
 export interface Strike {
   readonly id: number;
   readonly owner: number;
-  readonly kind: Element;
+  readonly kind: StrikeKind;
   readonly x: number;
   readonly age: number;
   /** Bit per fighter already struck (each is hit once per strike). */
   readonly struck: number;
+}
+
+/**
+ * What a dream's squirrel is doing: burrowing up (a mound shows where), leaping out, running at the
+ * target, winding up, lunging to bite, catching its breath; knocked out (flying off, dizzy) or
+ * poofing back into the ground; or, in the finale, leaping onto the target in a pile.
+ */
+export type CritterState = 'burrow' | 'leap' | 'run' | 'windup' | 'lunge' | 'recover' | 'knocked' | 'poof' | 'pile';
+
+/** One of the dream's squirrels (see dream.ts). Stage px and ticks, like fighters. */
+export interface Critter {
+  readonly id: number;
+  /** The dreamer who sent it (TKURII's index). */
+  readonly owner: number;
+  readonly x: number;
+  /** Feet height above the floor. */
+  readonly y: number;
+  readonly vx: number;
+  readonly vy: number;
+  readonly facing: 1 | -1;
+  readonly state: CritterState;
+  /** Ticks in `state`. */
+  readonly tick: number;
+  /** Burrowing up right under the target: its leap out of the ground bites. */
+  readonly ambush: boolean;
+  /** Its current bite already landed. */
+  readonly hit: boolean;
+  /** Run speed multiplier, so a pack spreads out instead of moving in lockstep. */
+  readonly pace: number;
+  /** A pile squirrel's share of the damage it brings down. */
+  readonly share: number;
 }
 
 export interface KnockOut {
@@ -136,6 +175,8 @@ export interface GameState {
   /** At most one per fighter. */
   readonly cataclysms: readonly Cataclysm[];
   readonly strikes: readonly Strike[];
+  /** Squirrels of a running dream. */
+  readonly critters: readonly Critter[];
   /** Someone has pressed a fight key this round (until then, characters may still be switched). */
   readonly started: boolean;
   /** Set once the round has been decided; the round restarts KO_RESET_TICKS later. */
@@ -143,6 +184,14 @@ export interface GameState {
 }
 
 export type Mutable<T> = { -readonly [K in keyof T]: T[K] };
+
+/**
+ * A mind fighter holding their stance while their dream runs is not in it: nothing can hit them,
+ * bump into them, or face them (the dreamer sees an empty valley where they stood).
+ */
+export function awayInDream(f: FighterState): boolean {
+  return f.action === 'channel' && f.element === 'mind';
+}
 
 /** Start a new action from its first tick, dropping whatever the previous one carried. */
 export function setAction(f: Mutable<FighterState>, action: Action): void {
@@ -155,13 +204,14 @@ export function setAction(f: Mutable<FighterState>, action: Action): void {
 }
 
 export function loadoutOf(f: FighterState): Loadout {
-  return { element: f.element, kit: f.kit };
+  return { element: f.element, kit: f.kit, sonic: f.sonic };
 }
 
 export function createFighter(x: number, facing: 1 | -1, loadout: Loadout = DEFAULT_LOADOUTS[0]): FighterState {
   return {
     element: loadout.element,
     kit: loadout.kit,
+    sonic: loadout.sonic,
     x,
     y: 0,
     vx: 0,
@@ -214,6 +264,7 @@ export function createInitialState(
     clashes: [],
     cataclysms: [],
     strikes: [],
+    critters: [],
     started: false,
     ko: null,
   };

@@ -8,6 +8,7 @@ import {
   SHIELD_OPEN_TICKS,
   SHIELD_REACH,
   SHOVE_SPEED,
+  SONIC_GRAZE,
   STRIKE_GRACE_TICKS,
   HURT_HALF_WIDTH,
   HURT_HEIGHT,
@@ -20,12 +21,12 @@ import {
 } from './constants';
 import { strikeActive } from './cataclysm';
 import { MOVES, MUZZLE, STRIKE_HITS, isMoveId, phaseAt, sustainEndTick, type HitDef } from './moves';
-import { setAction, type Clash, type FighterState, type Mutable, type ProjectileState, type Strike } from './state';
+import { awayInDream, setAction, type Clash, type FighterState, type Mutable, type ProjectileState, type Strike } from './state';
 
 /** Where a clash happened; `step` stamps the id and tick. */
 export type ClashSpawn = Omit<Clash, 'id' | 'tick'>;
 
-interface Box {
+export interface Box {
   readonly x0: number;
   readonly x1: number;
   readonly y0: number;
@@ -99,9 +100,13 @@ export function resolveCombat(
   const blast = MOVES.blast.hit!;
   for (const p of projectiles) {
     if (gone.has(p.id)) continue;
-    const victim = fighters.find((f, j) => j !== p.owner && f.action !== 'ko' && overlaps(hurtbox(f), around(p)));
+    const sonic = fighters[p.owner]?.sonic ?? false;
+    const victim = fighters.find((f, j) => j !== p.owner && f.action !== 'ko' && !awayInDream(f) && reaches(f, around(p), sonic));
     if (!victim) continue;
-    credit(fighters[p.owner], applyHit(victim, blast, p.vx > 0 ? 1 : -1));
+    const dir = p.vx > 0 ? 1 : -1;
+    // A sonic ball that only caught a ducking fighter bursts over them: a graze.
+    const dealt = overlaps(hurtbox(victim), around(p)) ? applyHit(victim, blast, dir) : graze(victim, blast, dir);
+    credit(fighters[p.owner], dealt);
     gone.add(p.id);
   }
 
@@ -111,7 +116,7 @@ export function resolveCombat(
 
 /** Kicks and beams: the attacker's active move against one opponent. */
 function strike(a: Mutable<FighterState>, v: Mutable<FighterState>): void {
-  if (v.action === 'ko' || (a.action !== 'kick' && a.action !== 'beam')) return;
+  if (v.action === 'ko' || awayInDream(v) || (a.action !== 'kick' && a.action !== 'beam')) return;
   const move = MOVES[a.action];
   const hit = move.hit;
   if (!hit || phaseAt(move, a.actionTick, a.moveSustained)?.phase !== 'active') return;
@@ -140,10 +145,15 @@ function strike(a: Mutable<FighterState>, v: Mutable<FighterState>): void {
     const front = shielding(v, a.facing) ? SHIELD_REACH : HURT_HALF_WIDTH;
     const contact = Math.max(0, ahead - front);
     const box = hurtbox(v);
-    if (ahead > -HURT_HALF_WIDTH && muzzleY >= box.y0 && muzzleY <= box.y1 && contact <= a.beamLength) {
-      a.beamLength = contact;
-      a.beamBlocked = true;
-      credit(a, applyHit(v, hit, a.facing));
+    if (ahead > -HURT_HALF_WIDTH && contact <= a.beamLength) {
+      if (muzzleY >= box.y0 && muzzleY <= box.y1) {
+        a.beamLength = contact;
+        a.beamBlocked = true;
+        credit(a, applyHit(v, hit, a.facing));
+      } else if (a.sonic && v.action === 'crouch' && muzzleY >= box.y0 && muzzleY <= v.y + HURT_HEIGHT) {
+        // A sonic beam spreads: it carries on over a ducking fighter, but grazes them as it passes.
+        credit(a, graze(v, hit, a.facing));
+      }
     }
   }
 }
@@ -201,7 +211,7 @@ function credit(a: Mutable<FighterState> | undefined, dealt: Dealt): void {
  * throw the victim into the air. A fighter in their super shrugs everything off. The victim's own
  * meter fills a little from what they lose; returns what was taken, for the attacker's.
  */
-function applyHit(v: Mutable<FighterState>, hit: HitDef, dir: 1 | -1): Dealt {
+export function applyHit(v: Mutable<FighterState>, hit: HitDef, dir: 1 | -1): Dealt {
   if (untouchable(v)) return NOTHING;
   if (!hit.unblockable && shielding(v, dir)) {
     const guard = Math.min(v.guard, hit.guardDamage);
@@ -243,12 +253,25 @@ function applyHit(v: Mutable<FighterState>, hit: HitDef, dir: 1 | -1): Dealt {
 }
 
 /**
+ * A sonic attack catching a fighter ducking under it: a share of the damage (SONIC_GRAZE), and
+ * nothing else, so they stay down. One that would finish them knocks them out as usual.
+ */
+function graze(v: Mutable<FighterState>, hit: HitDef, dir: 1 | -1): Dealt {
+  if (untouchable(v)) return NOTHING;
+  const damage = hit.damage * SONIC_GRAZE;
+  if (damage >= v.health) return applyHit(v, { ...hit, damage }, dir);
+  v.health -= damage;
+  v.meter = Math.min(METER_MAX, v.meter + damage * METER_GAIN.taken);
+  return { health: damage, guard: 0 };
+}
+
+/**
  * Bodies can't overlap. Normally they share the push. A raised shield is a solid wall at its
  * surface that holds its ground: only the other fighter gives way, and while the shield is still
  * unfolding it shoves them into a skid. Against a stage edge, whoever is pinned pushes the other.
  */
 function pushApart(a: Mutable<FighterState>, b: Mutable<FighterState>): void {
-  if (a.action === 'ko' || b.action === 'ko') return;
+  if (a.action === 'ko' || b.action === 'ko' || awayInDream(a) || awayInDream(b)) return;
   if (Math.abs(a.y - b.y) >= HURT_HEIGHT * 0.7) return; // clearing a head is allowed: jump over
   const [left, right] = a.x <= b.x ? [a, b] : [b, a];
   const leftWall = shieldTowards(left, right.x);
@@ -292,7 +315,7 @@ function reach(f: FighterState, shielded: boolean): number {
 }
 
 /** A beam in its active phase with some length out. */
-function firingBeam(f: FighterState): boolean {
+export function firingBeam(f: FighterState): boolean {
   return f.action === 'beam' && f.beamLength > 0 && phaseAt(MOVES.beam, f.actionTick, f.moveSustained)?.phase === 'active';
 }
 
@@ -312,7 +335,7 @@ function blastOnBeam(p: ProjectileState, f: FighterState): boolean {
   );
 }
 
-function muzzle(f: FighterState): { x: number; y: number } {
+export function muzzle(f: FighterState): { x: number; y: number } {
   return { x: f.x + f.facing * MUZZLE.x * FIGHTER_HEIGHT, y: f.y + MUZZLE.y * FIGHTER_HEIGHT };
 }
 
@@ -322,7 +345,7 @@ function shielding(f: FighterState, dir: 1 | -1): boolean {
 }
 
 /** The body, lower when ducking. A raised shield extends it forward, so attacks meet the shield first. */
-function hurtbox(f: FighterState): Box {
+export function hurtbox(f: FighterState): Box {
   const height = f.action === 'crouch' ? CROUCH_HURT_HEIGHT : HURT_HEIGHT;
   let x0 = f.x - HURT_HALF_WIDTH;
   let x1 = f.x + HURT_HALF_WIDTH;
@@ -333,10 +356,19 @@ function hurtbox(f: FighterState): Box {
   return { x0, x1, y0: f.y, y1: f.y + height };
 }
 
-function around(p: ProjectileState): Box {
+/**
+ * Does an attack filling `box` reach `f`: their body, or for a sonic one (which spreads) also the
+ * space a ducking fighter would fill standing up?
+ */
+function reaches(f: FighterState, box: Box, sonic: boolean): boolean {
+  if (overlaps(hurtbox(f), box)) return true;
+  return sonic && f.action === 'crouch' && overlaps({ ...hurtbox(f), y1: f.y + HURT_HEIGHT }, box);
+}
+
+export function around(p: ProjectileState): Box {
   return { x0: p.x - PROJECTILE_RADIUS, x1: p.x + PROJECTILE_RADIUS, y0: p.y - PROJECTILE_RADIUS, y1: p.y + PROJECTILE_RADIUS };
 }
 
-function overlaps(a: Box, b: Box): boolean {
+export function overlaps(a: Box, b: Box): boolean {
   return a.x0 < b.x1 && b.x0 < a.x1 && a.y0 < b.y1 && b.y0 < a.y1;
 }
